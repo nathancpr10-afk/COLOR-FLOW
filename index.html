@@ -1,0 +1,2376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Color Flow</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;padding:0;height:100%;width:100%;background:#06060F;overflow:hidden;
+    touch-action:none;-webkit-tap-highlight-color:transparent;
+    -webkit-user-select:none;user-select:none;font-family:'Poppins',Arial,sans-serif;}
+  #wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#06060F;
+    padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);}
+  canvas{display:block;}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c"></canvas></div>
+<script>
+(function(){
+"use strict";
+
+const W = 720, H = 1280;
+const CAPACITY = 4;
+const TOTAL_LEVELS = 50;
+const UNDO_START = 3;
+const TUBE_ADDS_START = 3;
+const AD_DURATION = 15;
+const AD_REWARD = 3;
+const GLOW_DURATION = 1.0;
+const AD_BANNER_HEIGHT = 110;
+const RESERVOIR_HEIGHT_FACTOR = 0.25;
+const TOAST_DURATION = 2.4;
+
+const BASE_BW       = 78 * 1.20 * 0.90;
+const BASE_BH_1ROW  = 230 * 1.20 * 1.30;
+const BASE_BH_2ROW  = 200 * 1.20 * 1.30;
+
+const T_ANTICIPATE = 0.06, T_ARC = 0.17, T_POUR_BASE = 0.15, T_POUR_PER = 0.032, T_RETURN = 0.20;
+const POUR_ANGLE = 62 * Math.PI / 180;
+const MAX_DROPS = 12;
+
+/* Police avec fallbacks CJK et Devanagari */
+const FONT = "'Poppins', 'Segoe UI', 'Helvetica Neue', 'Noto Sans', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans Devanagari', 'Mangal', Arial, sans-serif";
+
+const COLORS = {
+  R:'#FF1744', B:'#2979FF', G:'#00E676', J:'#FFEA00',
+  O:'#FF6D00', V:'#D500F9', K:'#FF4081', T:'#00E5FF'
+};
+const COLORS_LIGHT = {
+  R:'#FF6E7F', B:'#76B5FF', G:'#69F0AE', J:'#FFFF6E',
+  O:'#FFB04D', V:'#EA80FC', K:'#FF80AB', T:'#80FFFF'
+};
+const COLORS_DARK = {
+  R:'#B20020', B:'#0044CC', G:'#00B248', J:'#C7B800',
+  O:'#C43C00', V:'#9C27B0', K:'#C51162', T:'#00B8D4'
+};
+const COLOR_KEYS = Object.keys(COLORS);
+
+const LEVEL_DATA = [
+  [['G','G'],['G','G']],
+  [['B','B','R','B'],['B','R','R','R'],[]],
+  [['R','R','G'],['B','R','B'],['G','B','B','G'],['R','G']],
+  [['R','G'],['B','B','R'],['G','B','G'],['R','G','B','R']],
+  [['R','G','R'],['B','B','R'],['G','G','B'],['J','R','J'],['G','J','J','B']],
+  [['R','B','J'],['B','J','R'],['G','B'],['J','R','J','B'],['G','G','G','R']],
+  [['R','R','J','B'],[],['G','G','J','J'],['J','B','B','B'],['R','R','G','G']],
+  [['R','R','G'],['B','G'],['G','B','J','R'],['J','J','J','B'],['G','R','B']],
+  [['R','R','G','B'],['B','R'],['G','G','B'],['J','J','G','B'],['O','O','J'],['O','O','R','J']],
+  [['R','R','J'],['B','R','G'],['G','O','G'],['J','J','G','O'],['O','O','J'],['B','R','B','B']],
+  [['R','O','O','O'],['B','B','B','J'],['G','R','R','R'],['J','G','G'],['O','G'],['B','J','J']],
+  [['R','B'],['B','R','R','B'],['G','J','J'],['J','B','G'],['O','R','G','J'],['O','O','O','G']],
+  [['R','R','J','B'],['B','O','O'],['G','J','G'],['J','R','R','O'],['O','B'],['G','G','B','J']],
+  [['R','R','J'],['B','O','R','J'],['G','B','J'],['J','G','B'],['O','O','B'],['G','G','O','R']],
+  [['R','R','O','O'],['B','B','R','B'],['G','J','B','J'],['J','G'],['O','G'],['O','R','G','J']],
+  [['R','O','O','V'],['B','J','G'],['G','V','R','O'],['J','J','J','R'],['O','R'],['V','B','B','G'],['G','B','V']],
+  [['R','G','R','J'],['B','V','O'],['G','V','V','R'],['J','O'],['O','O','G','B'],['V','B','B','R'],['G','J','J']],
+  [['R','R','R','V'],['B','B','J','J'],['G','G','G','O'],['J','J','O','O'],['O','R','B','B'],['V','V','V','G'],[]],
+  [['R','R','J','V'],['B','B','V'],['G','B'],['J','R','R','G'],['O','O','J','G'],['V','B','V'],['O','O','J','G']],
+  [['R','R','O','R'],['B','B','J','O'],['G','V'],['J','J','V'],['O','G','G','B'],['V','V','R','B'],['G','O','J']],
+  [['R','O','J','G'],['B','B','R','J'],['G','V','R'],['J','V'],['O','O','J','V'],['V','G','G'],['B','B','R','O']],
+  [['R','O'],['B','B','B','G'],['G','G','V','J'],['J','R','O'],['O','R','O'],['V','V','J','R'],['G','B','V','J']],
+  [['R','R','K','G'],['B','B','J'],['G','G','B','K'],['J','J','B','V'],['O','R','V'],['V','J','G','R'],['K','O','O','O'],['K','V']],
+  [['R','R','R','J'],['B','B','V'],['G','B','B'],['J','J','J','O'],['O','O','K','K'],['V','V','O'],['K','K','V'],['R','G','G','G']],
+  [['R','R','R','K'],['B','R','K','V'],['G','J'],['J','B','G','K'],['O','O','O','J'],['V','J','B'],['K','V','V'],['G','G','B','O']],
+  [['R','R','B','O'],['B','B','V','V'],['G','O','G'],['J','G'],['O','J','J','K'],['V','V','R'],['K','G','B','J'],['K','K','R','O']],
+  [['R','B','V'],['B','K','O'],['G','G','J'],['J','V','J'],['O','G','K','O'],['V','V','O','J'],['K','K','B','B'],['R','R','R','G']],
+  [['R','V','G'],['B','R','R'],['G','J','J','B'],['J','B','G'],['O','V','R'],['V','V','J','B'],['K','K','G','K'],['O','O','O','K']],
+  [['R','R','J'],['B','B','V'],['G','G','V','G'],['J','R','R','O'],['O','V','J','O'],['V','O'],['K','K','B','K'],['J','K','G','B']],
+  [['R','R','K','G'],['B','B','O','G'],['G','B','J'],['J','K','V','G'],['O','J','K','B'],['V','J'],['K','O','O'],['V','V','R','R']],
+  [[],['B','V','R','R'],['G','G','G','R'],['J','J','J','K'],['O','O','O','T'],['V','V','V','R'],['K','K','K','G'],['T','T','T','O'],['B','B','B','J']],
+  [['R','K'],['B','G','R','B'],['G','G','T','V'],['J','J','G','R'],['O','O','O','K'],['V','V','V','K'],['K','J'],['T','T','R','J'],['B','B','T','O']],
+  [['R','K'],['B','B','T','V'],['G','G','G','T'],['J','R','R','K'],['O','J','J','V'],['V','K'],['K','J','B','B'],['T','O','T','V'],['O','O','R','G']],
+  [['R','B','B'],['B','K','B','T'],['G','K','T'],['J','V','K'],['O','J','J'],['V','G','G','O'],['K','O','O','R'],['T','J','V','V'],['G','R','R','T']],
+  [['R','R','J'],['B','B','B','J'],['G','G','V'],['J','J','O','O'],['O','O','B'],['V','V','V','G'],['K','K','R'],['T','T','T','R'],['K','K','G','T']],
+  [['R','V','B'],['B','B','R'],['G','G','G','B'],['J','J','T','V'],['O','O','R','O'],['V','T','J','K'],['K','K','V','R'],['T','O','K'],['G','T','J']],
+  [['R','B','T'],['B','B','O','O'],['G','G','J','T'],['J','V'],['O','V','V','G'],['V','R','R','B'],['K','R','G','T'],['T','O','J'],['K','K','K','J']],
+  [['R','B','R','R'],['B','J','G','K'],['G','K'],['J','G','G','T'],['O','O','O','T'],['V','V','V','T'],['K','R','V','K'],['T','J'],['O','B','B','J']],
+  [['R','R','V'],['B','B','T'],['G','G','O','G'],['J','J','J','G'],['O','K','O'],['V','B','V'],['K','O','T','V'],['T','K','J','T'],['R','R','B','K']],
+  [['R','B','B'],['B','T','T','O'],['G','G','G','V'],['J','V','R'],['O','O','J','V'],['V','B'],['K','K','J','R'],['T','K','R','J'],['G','T','O','K']],
+  [['R','J','G'],['B','B','K','T'],['G','G','O'],['J','J','J','T'],['O','O','G','R'],['V','B'],['K','R','V','R'],['T','T','V','B'],['K','V','K','O']],
+  [['R','V','T'],['B','B','B','O'],['G','G','G','V'],['J','J','V'],['O','T'],['V','T','K','G'],['K','J','K','R'],['T','K','J','R'],['O','B','O','R']],
+  [['R','R','R','G'],['B','B','O','O'],[],['J','J','G','G'],['O','O','R','G'],['V','V','V','J'],['K','K','K','B'],['T','B','T','J'],['V','T','T','K']],
+  [['R','G','O','V'],['B','V'],['G','G','T','J'],['J','J','J','T'],['O','G','B'],['V','R','R'],['K','R','O','V'],['T','B','B','O'],['K','K','K','T']],
+  [['R','B','O','K'],['B','K','K','T'],['G','G','T'],['J','J','J','O'],['O','V','O'],['V','B','G','G'],['K','V','R'],['T','T','J','V'],['B','R','R']],
+  [['R','R','O','G'],['B','B','G','K'],['G','B','K','K'],['J','J','T','G'],['O','O','V','J'],['V','V','R'],['K','R','V'],['T','J'],['T','O','B','T']],
+  [['R','R','B'],['B','G','O'],['G','R','G','O'],['J','J','T','K'],['O','K'],['V','V','R','O'],['K','K','G','J'],['T','T','T','V'],['J','B','V','B']],
+  [['R','K','O','T'],['B','T'],['G','G','R','T'],['J','B','G','G'],['O','O','K'],['V','O','V'],['K','K','V','B'],['T','R','J','R'],['J','B','J','V']],
+  [['R','R','G','T'],['B','K','O','K'],['G','O','G','T'],['J','G','V','B'],['O','O','B'],['V','V','J'],['K','K','B','T'],['T','V','R'],['R','J','J']],
+  [[],['B','R','G','J'],['G','G','G','B'],['J','J','R','R'],['O','O','B','T'],['V','V','K','O'],['K','K','O','K'],['T','B','T','T'],['V','V','J','R']]
+];
+
+const UI = {
+  bgTop:'#1A1B3E', bgMid:'#0F0F26', bgBot:'#06060F',
+  accent:'#00E5FF', accentDim:'rgba(0,229,255,0.18)',
+  btn3dTop:'#3D4D7C', btn3dMid:'#253260', btn3dBottom:'#131A3A', btn3dDark:'#0A0E20',
+  btn3dTopOff:'#454A60', btn3dMidOff:'#2F3448', btn3dBottomOff:'#1A1E2E',
+  glassBorderStrong:'rgba(255,255,255,0.22)',
+  textMain:'#F5F8FF', textSub:'#8A93C0',
+  danger:'#FF5370', toggleOn:'#00E5FF', toggleOff:'rgba(255,255,255,0.14)',
+  panelTop:'rgba(30,32,64,0.97)', panelBottom:'rgba(15,15,40,0.99)'
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   i18n — 5 langues les plus parlées au monde
+   (anglais, chinois, hindi, espagnol, français)
+   ═══════════════════════════════════════════════════════════════ */
+const I18N = {
+  en: {
+    level:'Level', continue:'CONTINUE', replay:'REPLAY',
+    watchAd:'WATCH AD', cancel:'CANCEL',
+    settings:'Settings', soundFx:'Sound effects',
+    ambience:'Music', vibration:'Vibration',
+    language:'Language', chooseLang:'Choose language',
+    resetProgress:'Reset progression',
+    resetConfirm:'Erase all progress?',
+    yes:'YES', no:'NO',
+    noMoreUndo:'No more undos!',
+    noMoreReservoir:'No more reservoirs!',
+    noActionToUndo:'No action to undo',
+    noReservoirAvailable:'No more reservoirs available',
+    congrats:'Bravo!', congrats2:'Congratulations!',
+    levelDonePre:'You completed level', levelDone:'completed',
+    ad:'AD',
+    tuto1s:'Pour green into the other tube', tuto1d:'Pour here to fill',
+    tuto2s:'Tap a tube', tuto2d:'Pour on same color',
+    tuto3s:'Think before pouring', tuto3d:'Top liquid goes first'
+  },
+  zh: {
+    level:'关卡', continue:'继续', replay:'重玩',
+    watchAd:'观看广告', cancel:'取消',
+    settings:'设置', soundFx:'音效',
+    ambience:'音乐', vibration:'振动',
+    language:'语言', chooseLang:'选择语言',
+    resetProgress:'重置进度',
+    resetConfirm:'清除所有进度？',
+    yes:'是', no:'否',
+    noMoreUndo:'没有更多撤销！',
+    noMoreReservoir:'没有更多储备！',
+    noActionToUndo:'没有可撤销的操作',
+    noReservoirAvailable:'没有可用的储备',
+    congrats:'太棒了！', congrats2:'恭喜！',
+    levelDonePre:'你完成了第', levelDone:'关',
+    ad:'广告',
+    tuto1s:'将绿色倒入另一个试管', tuto1d:'倒在这里装满',
+    tuto2s:'点击试管', tuto2d:'倒在相同颜色上',
+    tuto3s:'倒之前先思考', tuto3d:'上面的液体先出来'
+  },
+  hi: {
+    level:'स्तर', continue:'जारी रखें', replay:'फिर से खेलें',
+    watchAd:'विज्ञापन देखें', cancel:'रद्द करें',
+    settings:'सेटिंग्स', soundFx:'ध्वनि प्रभाव',
+    ambience:'संगीत', vibration:'कंपन',
+    language:'भाषा', chooseLang:'भाषा चुनें',
+    resetProgress:'प्रगति रीसेट करें',
+    resetConfirm:'सारी प्रगति मिटाएं?',
+    yes:'हाँ', no:'नहीं',
+    noMoreUndo:'और पूर्ववत नहीं!',
+    noMoreReservoir:'और भंडार नहीं!',
+    noActionToUndo:'पूर्ववत करने के लिए कोई कार्रवाई नहीं',
+    noReservoirAvailable:'कोई भंडार उपलब्ध नहीं',
+    congrats:'शाबाश!', congrats2:'बधाई हो!',
+    levelDonePre:'आपने स्तर पूरा किया', levelDone:'पूर्ण',
+    ad:'विज्ञापन',
+    tuto1s:'हरे को दूसरी ट्यूब में डालें', tuto1d:'भरने के लिए यहाँ डालें',
+    tuto2s:'ट्यूब पर टैप करें', tuto2d:'समान रंग पर डालें',
+    tuto3s:'डालने से पहले सोचें', tuto3d:'ऊपर का तरल पहले जाता है'
+  },
+  es: {
+    level:'Nivel', continue:'CONTINUAR', replay:'REPETIR',
+    watchAd:'VER ANUNCIO', cancel:'CANCELAR',
+    settings:'Ajustes', soundFx:'Efectos de sonido',
+    ambience:'Música', vibration:'Vibración',
+    language:'Idioma', chooseLang:'Elegir idioma',
+    resetProgress:'Reiniciar progreso',
+    resetConfirm:'¿Borrar todo el progreso?',
+    yes:'SÍ', no:'NO',
+    noMoreUndo:'¡Sin más deshacer!',
+    noMoreReservoir:'¡Sin más reservas!',
+    noActionToUndo:'Ninguna acción que deshacer',
+    noReservoirAvailable:'Sin reservas disponibles',
+    congrats:'¡Bravo!', congrats2:'¡Felicidades!',
+    levelDonePre:'Has completado el nivel', levelDone:'completado',
+    ad:'ANUNCIO',
+    tuto1s:'Vierte el verde en el otro tubo', tuto1d:'Vierte aquí para llenar',
+    tuto2s:'Toca un tubo', tuto2d:'Vierte sobre el mismo color',
+    tuto3s:'Piensa antes de verter', tuto3d:'El líquido de arriba sale primero'
+  },
+  fr: {
+    level:'Niveau', continue:'CONTINUER', replay:'REJOUER',
+    watchAd:'REGARDER LA PUB', cancel:'ANNULER',
+    settings:'Paramètres', soundFx:'Effets sonores',
+    ambience:'Musique', vibration:'Vibration',
+    language:'Langue', chooseLang:'Choisir la langue',
+    resetProgress:'Réinitialiser la progression',
+    resetConfirm:'Effacer toute la progression ?',
+    yes:'OUI', no:'NON',
+    noMoreUndo:"Plus d'annulations !",
+    noMoreReservoir:"Plus de réservoirs !",
+    noActionToUndo:"Aucune action à annuler",
+    noReservoirAvailable:"Plus de réservoirs disponibles",
+    congrats:'Bravo !', congrats2:'Félicitations !',
+    levelDonePre:'Tu as terminé le niveau', levelDone:'terminé',
+    ad:'PUBLICITÉ',
+    tuto1s:"Verse le vert dans l'autre tube", tuto1d:"Verse ici pour remplir",
+    tuto2s:"Tape sur un tube", tuto2d:"Verse sur la même couleur",
+    tuto3s:"Réfléchis avant de verser", tuto3d:"Le liquide du haut part en premier"
+  }
+};
+
+/* Détection automatique de la langue du joueur, anglais par défaut */
+const detectLang = () => {
+  try {
+    const raw = (navigator.language || navigator.userLanguage || 'en').toLowerCase();
+    const code = raw.split('-')[0];
+    if (I18N[code]) return code;
+    if (code === 'zh' || raw.indexOf('zh') === 0) return 'zh';
+    if (code === 'hi' || raw.indexOf('hi') === 0) return 'hi';
+    if (code === 'es' || raw.indexOf('es') === 0) return 'es';
+    if (code === 'fr' || raw.indexOf('fr') === 0) return 'fr';
+    return 'en';
+  } catch { return 'en'; }
+};
+
+const LANG_ORDER = ['en', 'zh', 'hi', 'es', 'fr'];
+const LANG_LABELS = {
+  en: { label: 'English', code: 'EN' },
+  zh: { label: '中文',    code: '中文' },
+  hi: { label: 'हिन्दी',   code: 'HI' },
+  es: { label: 'Español', code: 'ES' },
+  fr: { label: 'Français',code: 'FR' }
+};
+
+const Save = {
+  KEY: 'colorflow_v1',
+  data: {
+    version: 1,
+    currentLevel: 1, maxLevel: 1,
+    sound: true, music: true, vibrate: true,
+    undoCount: UNDO_START,
+    tubeAddsCount: TUBE_ADDS_START,
+    lang: null
+  },
+  load() {
+    let raw = null;
+    try { raw = JSON.parse(localStorage.getItem(this.KEY) || 'null'); } catch { raw = null; }
+    if (raw && typeof raw === 'object') {
+      for (const k in raw) if (raw[k] !== undefined && raw[k] !== null) this.data[k] = raw[k];
+    }
+    if (typeof this.data.undoCount !== 'number' || this.data.undoCount < 0) this.data.undoCount = UNDO_START;
+    if (typeof this.data.tubeAddsCount !== 'number' || this.data.tubeAddsCount < 0) this.data.tubeAddsCount = TUBE_ADDS_START;
+    if (this.data.currentLevel < 1 || this.data.currentLevel > TOTAL_LEVELS) this.data.currentLevel = 1;
+    if (this.data.maxLevel < 1) this.data.maxLevel = this.data.currentLevel;
+    if (!this.data.lang || !I18N[this.data.lang]) this.data.lang = detectLang();
+    this.data.version = 1;
+  },
+  save() {
+    try { localStorage.setItem(this.KEY, JSON.stringify(this.data)); } catch {}
+  },
+  setLevel(lvl) {
+    const n = Math.max(1, Math.min(TOTAL_LEVELS, lvl));
+    this.data.currentLevel = n;
+    if (n > this.data.maxLevel) this.data.maxLevel = n;
+    this.save();
+  },
+  reset() {
+    this.data.currentLevel = 1;
+    this.data.maxLevel = 1;
+    this.data.undoCount = UNDO_START;
+    this.data.tubeAddsCount = TUBE_ADDS_START;
+    this.save();
+  }
+};
+Save.load();
+
+let LANG = Save.data.lang;
+const t = (k) => (I18N[LANG] && I18N[LANG][k]) || I18N.en[k] || k;
+
+/* AUDIO */
+const Audio = {
+  ctx: null, master: null, sfxGain: null, ambientGain: null,
+  ambientOn: false, ambTimer: null, ambNext: 0, ambBar: 0,
+  BPM: 108,
+  BEAT: 60 / 108,
+  BAR: 4 * 60 / 108,
+
+  PROGRESSION: [
+    { bass: 130.81, notes: [261.63, 329.63, 392.00, 523.25] },
+    { bass: 110.00, notes: [220.00, 261.63, 329.63, 440.00] },
+    { bass:  87.31, notes: [174.61, 220.00, 261.63, 349.23] },
+    { bass:  98.00, notes: [196.00, 246.94, 293.66, 392.00] }
+  ],
+  ARP_PATTERNS: [
+    [0, 1, 2, 3, 2, 1, 0, 1],
+    [0, 2, 1, 3, 1, 2, 0, 1],
+    [1, 2, 3, 2, 3, 2, 1, 0],
+    [0, 1, 3, 2, 3, 1, 2, 0]
+  ],
+
+  init() {
+    if (this.ctx) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try {
+      this.ctx = new AC();
+      this.master = this.ctx.createGain();
+      this.master.gain.value = 0.9;
+      this.master.connect(this.ctx.destination);
+
+      this.sfxGain = this.ctx.createGain();
+      this.sfxGain.gain.value = Save.data.sound ? 1 : 0;
+      this.sfxGain.connect(this.master);
+
+      this.ambientGain = this.ctx.createGain();
+      this.ambientGain.gain.value = Save.data.music ? 0.42 : 0;
+
+      const lp = this.ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 2200;
+      lp.Q.value = 0.5;
+      this.ambientGain.connect(lp);
+      lp.connect(this.master);
+
+      if (Save.data.music) this.startAmbient();
+    } catch { this.ctx = null; }
+  },
+  resume() {
+    if (this.ctx && this.ctx.state === 'suspended') {
+      try { this.ctx.resume(); } catch {}
+    }
+  },
+  startAmbient() {
+    if (!this.ctx || this.ambientOn) return;
+    this.ambientOn = true;
+    this.ambNext = this.ctx.currentTime + 0.15;
+    this.ambBar = 0;
+    const tick = () => {
+      if (!this.ambientOn || !this.ctx) return;
+      const now = this.ctx.currentTime;
+      while (this.ambNext < now + 1.0) {
+        this.playBar(this.ambNext, this.ambBar);
+        this.ambNext += this.BAR;
+        this.ambBar = (this.ambBar + 1) % 12;
+      }
+      this.ambTimer = setTimeout(tick, 300);
+    };
+    tick();
+  },
+  stopAmbient() {
+    this.ambientOn = false;
+    if (this.ambTimer) clearTimeout(this.ambTimer);
+    this.ambTimer = null;
+  },
+  playBar(when, barIdx) {
+    const chordIdx = barIdx % 4;
+    const chord = this.PROGRESSION[chordIdx];
+    const beat = this.BEAT;
+    const cycle = Math.floor(barIdx / 4);
+
+    this.kick(when);
+    this.kick(when + beat * 2);
+
+    this.bassNote(chord.bass, when, beat * 1.8);
+    this.bassNote(chord.bass, when + beat * 2, beat * 1.8);
+
+    const pattern = this.ARP_PATTERNS[(chordIdx + cycle) % this.ARP_PATTERNS.length];
+    for (let i = 0; i < 8; i++) {
+      const t0 = when + i * (beat / 2);
+      const noteIdx = pattern[i];
+      const freq = chord.notes[noteIdx];
+      const vel = (i === 0 || i === 4) ? 0.085 : 0.052;
+      this.arpNote(freq, t0, vel);
+    }
+
+    if (cycle === 2 && (chordIdx === 2 || chordIdx === 3)) {
+      this.bell(chord.notes[2], when + beat * 2.5);
+    }
+  },
+  kick(when) {
+    const c = this.ctx;
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(120, when);
+    o.frequency.exponentialRampToValueAtTime(45, when + 0.09);
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.linearRampToValueAtTime(0.14, when + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + 0.20);
+    o.connect(g); g.connect(this.ambientGain);
+    o.start(when); o.stop(when + 0.25);
+  },
+  bassNote(freq, when, dur) {
+    const c = this.ctx;
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = 'triangle';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.linearRampToValueAtTime(0.12, when + 0.02);
+    g.gain.linearRampToValueAtTime(0.085, when + dur * 0.7);
+    g.gain.linearRampToValueAtTime(0.0001, when + dur);
+    o.connect(g); g.connect(this.ambientGain);
+    o.start(when); o.stop(when + dur + 0.05);
+  },
+  arpNote(freq, when, vel) {
+    const c = this.ctx;
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = 'triangle';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.linearRampToValueAtTime(vel, when + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + 0.38);
+    o.connect(g); g.connect(this.ambientGain);
+    o.start(when); o.stop(when + 0.42);
+  },
+  bell(freq, when) {
+    const c = this.ctx;
+    const o = c.createOscillator();
+    const g = c.createGain();
+    o.type = 'sine';
+    o.frequency.value = freq * 1.5;
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.linearRampToValueAtTime(0.055, when + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + 1.4);
+    o.connect(g); g.connect(this.ambientGain);
+    o.start(when); o.stop(when + 1.5);
+  },
+  blip(freq, dur, type = 'sine', vol = 0.18, slideTo) {
+    if (!this.ctx || !Save.data.sound) return;
+    const now = this.ctx.currentTime;
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(freq, now);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, now + dur);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.linearRampToValueAtTime(vol, now + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.connect(g); g.connect(this.sfxGain);
+    o.start(now); o.stop(now + dur + 0.03);
+  },
+  pickup() { this.blip(880, 0.10, 'sine', 0.20, 1320); },
+  putDown() { this.blip(220, 0.12, 'sine', 0.14, 160); },
+  invalid() { this.blip(170, 0.18, 'sawtooth', 0.12, 110); },
+  undo() { this.blip(420, 0.12, 'sine', 0.18, 250); },
+  button() { this.blip(680, 0.07, 'square', 0.09); },
+  toast() { this.blip(520, 0.14, 'sine', 0.16, 400); },
+  complete() {
+    [523, 659, 784, 1047].forEach((f, i) =>
+      setTimeout(() => this.blip(f, 0.20, 'sine', 0.20), i * 90));
+  },
+  addTube() {
+    [523, 659, 784, 1047].forEach((f, i) =>
+      setTimeout(() => this.blip(f, 0.15, 'sine', 0.20), i * 50));
+  },
+  victoryFanfare() {
+    [523, 659, 784, 1047, 1319].forEach((f, i) =>
+      setTimeout(() => this.blip(f, 0.30, 'triangle', 0.20), i * 130));
+  }
+};
+const vibrate = (p) => {
+  if (!Save.data.vibrate || !navigator.vibrate) return;
+  try { navigator.vibrate(p); } catch {}
+};
+
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+const easeInOutCubic = (t) => t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2;
+const hexToRgba = (hex, a) => {
+  const h = hex.replace('#', '');
+  return `rgba(${parseInt(h.substring(0,2),16)},${parseInt(h.substring(2,4),16)},${parseInt(h.substring(4,6),16)},${a})`;
+};
+const mulberry32 = (a) => () => {
+  a |= 0; a = a + 0x6D2B79F5 | 0;
+  let t = Math.imul(a ^ a >>> 15, 1 | a);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+  return ((t ^ t >>> 14) >>> 0) / 4294967296;
+};
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d', { alpha: false });
+
+let bgCache = null;
+let bottleGradCache = {};
+
+const layout = () => {
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+  canvas.style.width = (W * s) + 'px';
+  canvas.style.height = (H * s) + 'px';
+  canvas.width = Math.round(W * s * dpr);
+  canvas.height = Math.round(H * s * dpr);
+  ctx.setTransform(s * dpr, 0, 0, s * dpr, 0, 0);
+  bgCache = null;
+  bottleGradCache = {};
+};
+window.addEventListener('resize', layout);
+window.addEventListener('orientationchange', () => setTimeout(layout, 120));
+layout();
+
+const toLogical = (e) => {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H };
+};
+
+const Stars = {
+  list: [],
+  init() {
+    if (this.list.length) return;
+    const rng = mulberry32(99);
+    for (let i = 0; i < 55; i++) {
+      this.list.push({
+        x: rng() * W, y: rng() * H,
+        r: 0.5 + rng() * 1.6,
+        phase: rng() * Math.PI * 2,
+        speed: 0.4 + rng() * 1.2,
+        alpha: 0.3 + rng() * 0.5
+      });
+    }
+  },
+  draw(time) {
+    this.init();
+    for (const s of this.list) {
+      const tw = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(time * 0.001 * s.speed + s.phase));
+      ctx.fillStyle = `rgba(255,255,255,${s.alpha * tw})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+};
+
+const getBgCanvas = () => {
+  if (bgCache) return bgCache;
+  const c = document.createElement('canvas');
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+  c.width = W * dpr; c.height = H * dpr;
+  const g = c.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const bg = g.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, UI.bgTop);
+  bg.addColorStop(0.45, UI.bgMid);
+  bg.addColorStop(1, UI.bgBot);
+  g.fillStyle = bg;
+  g.fillRect(0, 0, W, H);
+  bgCache = c;
+  return c;
+};
+
+const drawBackground = (time) => {
+  ctx.drawImage(getBgCanvas(), 0, 0, W, H);
+  Stars.draw(time);
+};
+
+const SplashPool = {
+  pool: [], active: [],
+  spawn(x, y, vx, vy, r, color) {
+    const p = this.pool.pop() || {};
+    p.x = x; p.y = y; p.vx = vx; p.vy = vy; p.r = r;
+    p.life = 0.55; p.maxLife = 0.55; p.color = color;
+    if (this.active.length >= MAX_DROPS) this.pool.push(this.active.shift());
+    this.active.push(p);
+  },
+  update(dt) {
+    for (let i = this.active.length - 1; i >= 0; i--) {
+      const p = this.active[i];
+      p.life -= dt;
+      p.vy += 1200 * dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      if (p.life <= 0) { this.pool.push(p); this.active.splice(i, 1); }
+    }
+  },
+  draw() {
+    for (const p of this.active) {
+      const a = p.life / p.maxLife;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = COLORS[p.color];
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * (0.6 + a * 0.4), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  },
+  reset() { while (this.active.length) this.pool.push(this.active.pop()); }
+};
+
+const RipplePool = {
+  pool: [], active: [],
+  spawn(x, y, color) {
+    const p = this.pool.pop() || {};
+    p.x = x; p.y = y; p.r = 4;
+    p.rMax = 30 + Math.random() * 10;
+    p.life = 0.5; p.maxLife = 0.5; p.color = color;
+    this.active.push(p);
+  },
+  update(dt) {
+    for (let i = this.active.length - 1; i >= 0; i--) {
+      const p = this.active[i];
+      p.life -= dt;
+      p.r = 4 + (p.rMax - 4) * (1 - p.life / p.maxLife);
+      if (p.life <= 0) { this.pool.push(p); this.active.splice(i, 1); }
+    }
+  },
+  draw() {
+    for (const p of this.active) {
+      const a = p.life / p.maxLife;
+      ctx.globalAlpha = a * 0.5;
+      ctx.strokeStyle = COLORS[p.color];
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y, p.r, p.r * 0.28, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  },
+  reset() { while (this.active.length) this.pool.push(this.active.pop()); }
+};
+
+const ConfettiPool = {
+  pool: [], active: [],
+  spawnBurst(count) {
+    for (let i = 0; i < count; i++) {
+      const p = this.pool.pop() || {};
+      p.x = 60 + Math.random() * (W - 120);
+      p.y = -30 - Math.random() * 100;
+      p.vx = (Math.random() - 0.5) * 120;
+      p.vy = 180 + Math.random() * 180;
+      p.rot = Math.random() * Math.PI * 2;
+      p.vrot = (Math.random() - 0.5) * 8;
+      p.color = COLORS[COLOR_KEYS[i % COLOR_KEYS.length]];
+      this.active.push(p);
+    }
+  },
+  update(dt) {
+    for (let i = this.active.length - 1; i >= 0; i--) {
+      const p = this.active[i];
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.rot += p.vrot * dt;
+      if (p.y > H + 40) { this.pool.push(p); this.active.splice(i, 1); }
+    }
+  },
+  draw() {
+    for (const p of this.active) {
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-5, -9, 10, 18);
+      ctx.restore();
+    }
+  },
+  reset() { while (this.active.length) this.pool.push(this.active.pop()); }
+};
+
+const roundRect = (x, y, w, h, r) => {
+  let tl, tr, br, bl;
+  if (typeof r === 'number') { tl = tr = br = bl = r; }
+  else { tl = r[0]; tr = r[1]; br = r[2]; bl = r[3]; }
+  ctx.beginPath();
+  ctx.moveTo(x + tl, y);
+  ctx.lineTo(x + w - tr, y);
+  if (tr > 0) ctx.quadraticCurveTo(x + w, y, x + w, y + tr);
+  ctx.lineTo(x + w, y + h - br);
+  if (br > 0) ctx.quadraticCurveTo(x + w, y + h, x + w - br, y + h);
+  ctx.lineTo(x + bl, y + h);
+  if (bl > 0) ctx.quadraticCurveTo(x, y + h, x, y + h - bl);
+  ctx.lineTo(x, y + tl);
+  if (tl > 0) ctx.quadraticCurveTo(x, y, x + tl, y);
+  ctx.closePath();
+};
+
+const text = (str, x, y, opts = {}) => {
+  ctx.font = `${opts.weight || '600'} ${opts.size || 28}px ${opts.font || FONT}`;
+  ctx.fillStyle = opts.color || UI.textMain;
+  ctx.textAlign = opts.align || 'center';
+  ctx.textBaseline = opts.baseline || 'middle';
+  ctx.fillText(str, x, y);
+};
+
+const drawGlassPanel = (x, y, w, h, r, opts = {}) => {
+  ctx.save();
+  const shadow = opts.shadowStrength !== undefined ? opts.shadowStrength : 1;
+  if (shadow > 0) {
+    ctx.save();
+    ctx.globalAlpha = 0.55 * shadow;
+    ctx.fillStyle = '#000';
+    roundRect(x + 2, y + 12, w, h, r);
+    ctx.fill();
+    ctx.restore();
+  }
+  const grad = ctx.createLinearGradient(0, y, 0, y + h);
+  grad.addColorStop(0, UI.panelTop);
+  grad.addColorStop(1, UI.panelBottom);
+  ctx.fillStyle = grad;
+  roundRect(x, y, w, h, r);
+  ctx.fill();
+  ctx.strokeStyle = UI.glassBorderStrong;
+  ctx.lineWidth = 1.2;
+  roundRect(x, y, w, h, r);
+  ctx.stroke();
+  ctx.restore();
+};
+
+const drawIcon = (name, x, y, size, color, lineW = 2.8) => {
+  const s = size / 24;
+  const lw = lineW / s;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = lw;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  switch (name) {
+    case 'undo':
+      ctx.beginPath(); ctx.moveTo(0.5, -4);
+      ctx.bezierCurveTo(-2.15, -4, -4.55, -3.01, -6.4, -1.4);
+      ctx.lineTo(-10, -5); ctx.lineTo(-10, 4); ctx.lineTo(-1, 4); ctx.lineTo(-4.62, 0.38);
+      ctx.bezierCurveTo(-3.23, -0.78, -1.46, -1.5, 0.5, -1.5);
+      ctx.bezierCurveTo(4.04, -1.5, 7.05, 0.81, 8.1, 4);
+      ctx.lineTo(10.47, 3.22);
+      ctx.bezierCurveTo(9.08, -0.97, 5.15, -4, 0.5, -4);
+      ctx.closePath(); ctx.fill();
+      break;
+    case 'gear':
+      ctx.beginPath(); ctx.arc(0, 0, 9.5, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth *= 1.8;
+      for (let i = 0; i < 8; i++) {
+        const a = i * Math.PI / 4 + Math.PI / 8;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * 9.5, Math.sin(a) * 9.5);
+        ctx.lineTo(Math.cos(a) * 11.5, Math.sin(a) * 11.5);
+        ctx.stroke();
+      }
+      ctx.lineWidth /= 1.8;
+      ctx.beginPath(); ctx.arc(0, 0, 3.5, 0, Math.PI * 2); ctx.stroke();
+      break;
+    case 'close':
+      ctx.beginPath();
+      ctx.moveTo(-8, -8); ctx.lineTo(8, 8);
+      ctx.moveTo(8, -8); ctx.lineTo(-8, 8);
+      ctx.stroke();
+      break;
+    case 'speaker':
+      ctx.beginPath();
+      ctx.moveTo(-9, -3); ctx.lineTo(-5, -3); ctx.lineTo(-1, -8);
+      ctx.lineTo(-1, 8); ctx.lineTo(-5, 3); ctx.lineTo(-9, 3);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.arc(0, 0, 4.5, -Math.PI * 0.55, Math.PI * 0.55); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 0, 7.5, -Math.PI * 0.55, Math.PI * 0.55); ctx.stroke();
+      break;
+    case 'note':
+      ctx.beginPath(); ctx.moveTo(-1, -9); ctx.lineTo(-1, 7);
+      ctx.lineTo(9, 5); ctx.lineTo(9, -11); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(-5, 7, 5, 4, -0.3, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(5, 5, 5, 4, -0.3, 0, Math.PI * 2); ctx.fill();
+      break;
+    case 'wave':
+      ctx.beginPath();
+      ctx.moveTo(-11, -6); ctx.lineTo(11, -6);
+      ctx.moveTo(-11, 0);  ctx.lineTo(11, 0);
+      ctx.moveTo(-11, 6);  ctx.lineTo(11, 6);
+      ctx.stroke();
+      break;
+    case 'globe':
+      ctx.beginPath(); ctx.arc(0, 0, 9.5, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-9.5, 0); ctx.lineTo(9.5, 0); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(0, 0, 4.5, 9.5, 0, 0, Math.PI * 2); ctx.stroke();
+      break;
+    case 'trash':
+      ctx.beginPath(); ctx.moveTo(-8, -7); ctx.lineTo(8, -7); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-3, -7); ctx.lineTo(-3, -10);
+      ctx.lineTo(3, -10); ctx.lineTo(3, -7);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-6, -7); ctx.lineTo(-5, 10);
+      ctx.quadraticCurveTo(-5, 11, -4, 11);
+      ctx.lineTo(4, 11);
+      ctx.quadraticCurveTo(5, 11, 5, 10);
+      ctx.lineTo(6, -7);
+      ctx.stroke();
+      break;
+    case 'jarPlus':
+      ctx.beginPath();
+      ctx.moveTo(-6.5, -9); ctx.lineTo(-6.5, 5);
+      ctx.quadraticCurveTo(-6.5, 9.5, -2, 9.5);
+      ctx.lineTo(2, 9.5);
+      ctx.quadraticCurveTo(6.5, 9.5, 6.5, 5);
+      ctx.lineTo(6.5, -9);
+      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-9, -9); ctx.lineTo(9, -9); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(13, -13); ctx.lineTo(13, -3);
+      ctx.moveTo(8, -8);   ctx.lineTo(18, -8);
+      ctx.stroke();
+      break;
+    default:
+      ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+};
+
+const buildJarPath = (p, w, h) => {
+  const hw = w / 2, top = -h, rBot = hw * 0.98;
+  p.moveTo(-hw - 4, top);
+  p.lineTo(-hw - 4, top + 8);
+  p.lineTo(-hw, top + 8);
+  p.lineTo(-hw, -rBot);
+  p.quadraticCurveTo(-hw, 0, 0, 0);
+  p.quadraticCurveTo(hw, 0, hw, -rBot);
+  p.lineTo(hw, top + 8);
+  p.lineTo(hw + 4, top + 8);
+  p.lineTo(hw + 4, top);
+};
+const traceJar = (g, w, h) => {
+  g.beginPath();
+  buildJarPath(g, w, h);
+  g.closePath();
+};
+
+let entriesPool = [];
+const buildEntries = (b) => {
+  const entries = entriesPool.pop() || [];
+  entries.length = 0;
+  const animating = !!(b.pourOut || b.pourIn);
+  if (b.pourOut) {
+    const keep = b.colors.length - b.pourOut.count;
+    for (let i = 0; i < keep; i++) entries.push({ color: b.colors[i], h: 1 });
+    const remain = 1 - b.pourOut.progress;
+    if (remain > 0.002) entries.push({ color: b.pourOut.color, h: b.pourOut.count * remain });
+  } else {
+    for (let i = 0; i < b.colors.length; i++) entries.push({ color: b.colors[i], h: 1 });
+  }
+  if (b.pourIn) {
+    const grow = b.pourIn.progress;
+    if (grow > 0.002) entries.push({ color: b.pourIn.color, h: b.pourIn.count * grow });
+  }
+  let w = 0, i = 0;
+  while (i < entries.length) {
+    const col = entries[i].color;
+    let sum = 0, j = i;
+    while (j < entries.length && entries[j].color === col) { sum += entries[j].h; j++; }
+    entries[w++] = { color: col, h: sum };
+    i = j;
+  }
+  entries.length = w;
+  return { entries, animating };
+};
+const releaseEntries = (built) => {
+  if (built && built.entries) entriesPool.push(built.entries);
+};
+
+const getLayerGradient = (colorKey, yTop, yBot) => {
+  const key = `${colorKey}_${yTop.toFixed(1)}_${yBot.toFixed(1)}`;
+  if (bottleGradCache[key]) return bottleGradCache[key];
+  if (Object.keys(bottleGradCache).length > 600) bottleGradCache = {};
+  const g = ctx.createLinearGradient(0, yTop, 0, yBot);
+  g.addColorStop(0, COLORS_LIGHT[colorKey] || COLORS[colorKey]);
+  g.addColorStop(0.5, COLORS[colorKey]);
+  g.addColorStop(1, COLORS_DARK[colorKey] || COLORS[colorKey]);
+  bottleGradCache[key] = g;
+  return g;
+};
+
+const isBottleComplete = (b) => {
+  if (!b || !b.colors || b.isReservoir) return false;
+  if (b.colors.length !== b.capacity) return false;
+  for (let i = 1; i < b.colors.length; i++) if (b.colors[i] !== b.colors[0]) return false;
+  return true;
+};
+
+const drawBottle = (b, time) => {
+  const w = b.w, h = b.h;
+  const layerH = h / b.capacity;
+
+  ctx.save();
+  ctx.translate(b.x + b.shakeOffset, b.y + b.selectOffset);
+  ctx.rotate(b.rot);
+
+  if (Math.abs(b.rot) < 0.05) {
+    const sh = ctx.createRadialGradient(0, 8, 2, 0, 8, w * 0.80);
+    sh.addColorStop(0, 'rgba(0,0,0,0.75)');
+    sh.addColorStop(0.6, 'rgba(0,0,0,0.30)');
+    sh.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = sh;
+    ctx.beginPath();
+    ctx.ellipse(0, 10, w * 0.80, 18, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const built = buildEntries(b);
+  const entries = built.entries;
+  const animating = built.animating;
+
+  ctx.save();
+  traceJar(ctx, w, h);
+  ctx.clip();
+
+  const glassBg = ctx.createLinearGradient(-w / 2, 0, w / 2, 0);
+  glassBg.addColorStop(0, 'rgba(18,20,38,0.96)');
+  glassBg.addColorStop(0.15, 'rgba(32,36,60,0.88)');
+  glassBg.addColorStop(0.50, 'rgba(22,26,46,0.82)');
+  glassBg.addColorStop(0.85, 'rgba(32,36,60,0.88)');
+  glassBg.addColorStop(1, 'rgba(18,20,38,0.96)');
+  ctx.fillStyle = glassBg;
+  ctx.fillRect(-w, -h * 1.05, w * 2, h * 1.3);
+
+  let acc = 0;
+  const phase = time * 0.004 + b.id * 1.7;
+  const wobble = b.touchWobble > 0 ? b.touchWobble : 0;
+  let liquidTopY = 0, topColor = null, hasLiquid = false, liquidBottomY = 0;
+
+  for (let k = 0; k < entries.length; k++) {
+    const e = entries[k];
+    const hgt = Math.max(e.h * layerH, 1.5);
+    const yTop = -acc - hgt;
+    const yBot = -acc;
+    ctx.fillStyle = getLayerGradient(e.color, Math.round(yTop), Math.round(yBot));
+    const fillTop = yTop;
+    const fillBot = (k === 0) ? h * 0.5 : yBot;
+    ctx.fillRect(-w, fillTop, w * 2, fillBot - fillTop);
+    acc += hgt;
+    liquidTopY = yTop;
+    topColor = e.color;
+    hasLiquid = true;
+    liquidBottomY = fillBot;
+  }
+
+  if (hasLiquid) {
+    const sheen = ctx.createLinearGradient(-w / 2, 0, w / 2, 0);
+    sheen.addColorStop(0, 'rgba(255,255,255,0.28)');
+    sheen.addColorStop(0.18, 'rgba(255,255,255,0.06)');
+    sheen.addColorStop(0.45, 'rgba(255,255,255,0)');
+    sheen.addColorStop(0.88, 'rgba(0,0,0,0)');
+    sheen.addColorStop(1, 'rgba(0,0,0,0.18)');
+    ctx.fillStyle = sheen;
+    ctx.fillRect(-w, liquidTopY, w * 2, liquidBottomY - liquidTopY);
+  }
+
+  if (!animating && hasLiquid && topColor && acc > 1) {
+    const surfaceY = liquidTopY;
+    const amp = 0.6 + (b.smoothLevel || 0) * 1.0 + wobble * 2.8;
+    ctx.fillStyle = COLORS_LIGHT[topColor] || COLORS[topColor];
+    ctx.beginPath();
+    ctx.moveTo(-w, surfaceY + 12);
+    ctx.lineTo(-w, surfaceY);
+    for (let s = 0; s <= 20; s++) {
+      const px = -w + (w * 2) * s / 20;
+      ctx.lineTo(px, surfaceY + Math.sin(px * 0.15 + phase * 0.8) * amp);
+    }
+    ctx.lineTo(w, surfaceY);
+    ctx.lineTo(w, surfaceY + 12);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.lineWidth = 2.4;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let s = 0; s <= 20; s++) {
+      const px = -w + (w * 2) * s / 20;
+      const wave = Math.sin(px * 0.15 + phase * 0.8) * amp;
+      if (s === 0) ctx.moveTo(px, surfaceY + wave); else ctx.lineTo(px, surfaceY + wave);
+    }
+    ctx.stroke();
+  }
+
+  const edgeW = w * 0.14;
+  const edgeL = ctx.createLinearGradient(-w / 2, 0, -w / 2 + edgeW, 0);
+  edgeL.addColorStop(0, 'rgba(0,0,0,0.60)');
+  edgeL.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = edgeL;
+  ctx.fillRect(-w / 2, -h, edgeW, h);
+  const edgeR = ctx.createLinearGradient(w / 2, 0, w / 2 - edgeW, 0);
+  edgeR.addColorStop(0, 'rgba(0,0,0,0.60)');
+  edgeR.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = edgeR;
+  ctx.fillRect(w / 2 - edgeW, -h, edgeW, h);
+
+  ctx.restore();
+
+  ctx.save();
+  traceJar(ctx, w, h);
+  ctx.clip();
+  const bodyGrad = ctx.createLinearGradient(-w * 0.35, 0, -w * 0.10, 0);
+  bodyGrad.addColorStop(0, 'rgba(255,255,255,0)');
+  bodyGrad.addColorStop(0.5, 'rgba(255,255,255,0.38)');
+  bodyGrad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = bodyGrad;
+  ctx.fillRect(-w * 0.40, -h * 0.72, w * 0.30, h * 0.68);
+  const bodyGrad2 = ctx.createLinearGradient(w * 0.20, 0, w * 0.40, 0);
+  bodyGrad2.addColorStop(0, 'rgba(255,255,255,0)');
+  bodyGrad2.addColorStop(0.5, 'rgba(255,255,255,0.22)');
+  bodyGrad2.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = bodyGrad2;
+  ctx.fillRect(w * 0.18, -h * 0.74, w * 0.24, h * 0.70);
+  ctx.restore();
+
+  traceJar(ctx, w, h);
+  ctx.strokeStyle = 'rgba(6,4,14,0.96)';
+  ctx.lineWidth = 4.5;
+  ctx.stroke();
+  ctx.save();
+  ctx.scale(0.97, 0.982);
+  traceJar(ctx, w, h);
+  ctx.strokeStyle = b.isReservoir ? 'rgba(0,229,255,0.85)' : 'rgba(230,240,255,0.72)';
+  ctx.lineWidth = 2.4;
+  ctx.stroke();
+  ctx.restore();
+
+  if (b.flash > 0) {
+    ctx.save();
+    traceJar(ctx, w, h);
+    ctx.clip();
+    ctx.fillStyle = `rgba(255,255,255,${b.flash * 0.75})`;
+    ctx.fillRect(-w, -h * 1.05, w * 2, h * 1.15);
+    ctx.restore();
+  }
+
+  if (b.glowT > 0 && b.colors.length > 0) {
+    const t01 = clamp(b.glowT / GLOW_DURATION, 0, 1);
+    const prog = 1 - t01;
+    const intensity = prog < 0.6 ? 1 : Math.max(0, (1 - prog) / 0.4);
+    const pulse = 0.92 + 0.08 * Math.sin(time * 0.025);
+    const jarCol = b.colors[0];
+    const lightCol = COLORS_LIGHT[jarCol] || COLORS[jarCol];
+    const mainCol = COLORS[jarCol];
+
+    ctx.save();
+    const halo = ctx.createRadialGradient(0, -h * 0.5, w * 0.20, 0, -h * 0.5, w * 1.9);
+    halo.addColorStop(0, hexToRgba(lightCol, 0.90 * intensity * pulse));
+    halo.addColorStop(0.35, hexToRgba(mainCol, 0.55 * intensity * pulse));
+    halo.addColorStop(0.70, hexToRgba(mainCol, 0.20 * intensity));
+    halo.addColorStop(1, hexToRgba(mainCol, 0));
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(0, -h * 0.5, w * 1.9, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    traceJar(ctx, w, h);
+    ctx.clip();
+    ctx.fillStyle = hexToRgba(lightCol, 0.35 * intensity * pulse);
+    ctx.fillRect(-w, -h * 1.05, w * 2, h * 1.15);
+    ctx.restore();
+
+    traceJar(ctx, w, h);
+    ctx.strokeStyle = hexToRgba(lightCol, 0.98 * intensity);
+    ctx.lineWidth = 4.5;
+    ctx.stroke();
+
+    ctx.globalCompositeOperation = 'lighter';
+    traceJar(ctx, w, h);
+    ctx.strokeStyle = hexToRgba(mainCol, 0.55 * intensity * pulse);
+    ctx.lineWidth = 14;
+    ctx.stroke();
+    traceJar(ctx, w, h);
+    ctx.strokeStyle = hexToRgba(lightCol, 0.45 * intensity * pulse);
+    ctx.lineWidth = 7;
+    ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over';
+
+    for (let sp = 0; sp < 6; sp++) {
+      const srng = mulberry32(b.id * 31 + sp * 7);
+      const sprog = (1 - t01 + srng() * 0.4 + sp * 0.17) % 1;
+      const spx = (srng() - 0.5) * w * 1.4;
+      const spy = -h * (0.1 + sprog * 1.1);
+      const sa = Math.sin(sprog * Math.PI) * intensity * 0.9;
+      ctx.fillStyle = hexToRgba(lightCol, sa);
+      ctx.beginPath();
+      ctx.arc(spx, spy, 2.8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = hexToRgba(mainCol, sa * 0.6);
+      ctx.beginPath();
+      ctx.arc(spx, spy, 4.6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  releaseEntries(built);
+  ctx.restore();
+};
+
+let screen = 'game';
+let hudButtons = [], modalButtons = [];
+let settingsOpen = false, confirmOpen = false, adPending = false;
+let langPopupOpen = false;
+let adCountdown = AD_DURATION, adTimer = null, victoryT = 0;
+let adType = null;
+let toastMessage = '';
+let toastTimer = 0;
+
+const game = {
+  level: null, bottles: [], selected: null,
+  busy: false, finished: false, history: [],
+  pour: null
+};
+
+const clearBottles = () => { game.bottles.length = 0; };
+
+const showToast = (msg) => {
+  toastMessage = msg;
+  toastTimer = TOAST_DURATION;
+};
+
+const getLevelData = (lvl) => {
+  const d = LEVEL_DATA[lvl - 1];
+  if (Array.isArray(d)) return d.map(a => Array.isArray(a) ? a.slice() : []);
+  return [[]];
+};
+
+const startGame = (levelNum) => {
+  levelNum = clamp(levelNum, 1, TOTAL_LEVELS);
+  const state = getLevelData(levelNum);
+  game.level = { id: levelNum, bottles: state.length, capacity: CAPACITY, state };
+  clearBottles();
+  game.selected = null;
+  game.busy = false;
+  game.finished = false;
+  game.history.length = 0;
+  game.pour = null;
+  SplashPool.reset();
+  RipplePool.reset();
+  ConfettiPool.reset();
+  layoutBottles(game.level);
+  buildHUD();
+  Save.setLevel(levelNum);
+  screen = 'game';
+  settingsOpen = false;
+  confirmOpen = false;
+  langPopupOpen = false;
+  adPending = false;
+  adType = null;
+  if (adTimer) { clearInterval(adTimer); adTimer = null; }
+  modalButtons = [];
+  victoryT = 0;
+};
+
+const layoutBottles = (level) => {
+  const n = level.bottles;
+  const rows = n <= 6 ? 1 : 2;
+  const perRow = Math.ceil(n / rows);
+  const spacingX = (W - 40) / perRow;
+  const bw = Math.min(BASE_BW, spacingX - 12);
+  const bhFull = rows === 2 ? BASE_BH_2ROW : BASE_BH_1ROW;
+  const playTop = 240;
+  const playH = H - playTop - AD_BANNER_HEIGHT - 20;
+  const rowGap = 30;
+  const totalH = rows * bhFull + (rows - 1) * rowGap;
+  const startY = playTop + Math.max(0, (playH - totalH) / 2);
+  let idx = 0;
+  for (let r = 0; r < rows; r++) {
+    const count = Math.min(perRow, n - r * perRow);
+    const rowW = (count - 1) * spacingX;
+    const x0 = (W - rowW) / 2;
+    const baseY = startY + r * (bhFull + rowGap) + bhFull;
+    for (let c = 0; c < count; c++) {
+      const x = count === 1 ? W / 2 : x0 + c * spacingX;
+      const colorsInit = (level.state[idx] || []).slice();
+      game.bottles.push({
+        id: idx, baseX: x, baseY, x, y: baseY, rot: 0,
+        w: bw, h: bhFull, capacity: CAPACITY,
+        colors: colorsInit,
+        selected: false, selectOffset: 0,
+        shake: 0, shakeOffset: 0,
+        smoothLevel: 0, touchWobble: 0,
+        flash: 0, wasComplete: false, glowT: 0,
+        isReservoir: false,
+        pourOut: null, pourIn: null
+      });
+      idx++;
+    }
+  }
+};
+
+const buildHUD = () => {
+  hudButtons = [];
+  const canUndo = game.history.length > 0 && !game.busy && Save.data.undoCount > 0;
+  const canAddTube = Save.data.tubeAddsCount > 0 && !game.busy && !game.finished;
+
+  hudButtons.push({ x: W - 60, y: 68, w: 72, h: 72, icon: 'gear', onClick: openSettings, pressT: 0 });
+
+  const btnSize = 84, gap = 60;
+  const startX = (W - btnSize * 2 - gap) / 2 + btnSize / 2;
+  const btnY = 180;
+  hudButtons.push({
+    x: startX, y: btnY, w: btnSize, h: btnSize,
+    icon: 'undo', disabled: !canUndo,
+    badge: String(Math.max(0, Save.data.undoCount)),
+    badgeType: 'undo',
+    onClick: undoMove, pressT: 0
+  });
+  hudButtons.push({
+    x: startX + btnSize + gap, y: btnY, w: btnSize, h: btnSize,
+    icon: 'jarPlus', disabled: !canAddTube,
+    badge: String(Math.max(0, Save.data.tubeAddsCount)),
+    badgeType: 'power',
+    onClick: addReservoir, pressT: 0
+  });
+};
+
+const addReservoir = () => {
+  if (game.busy || game.finished || game.pour) return;
+  if (Save.data.tubeAddsCount <= 0) { showAdModal('reservoir'); return; }
+  Save.data.tubeAddsCount--;
+  Save.save();
+  const curColors = game.bottles.map(b => b.colors.slice());
+  curColors.push([]);
+  game.level.state = curColors;
+  game.level.bottles = curColors.length;
+  const prevReservoirFlags = game.bottles.map(b => b.isReservoir);
+  clearBottles();
+  game.selected = null;
+  layoutBottles(game.level);
+  for (let i = 0; i < prevReservoirFlags.length && i < game.bottles.length; i++) {
+    if (prevReservoirFlags[i]) {
+      game.bottles[i].isReservoir = true;
+      game.bottles[i].capacity = 1;
+      game.bottles[i].h = BASE_BH_1ROW * RESERVOIR_HEIGHT_FACTOR;
+    }
+  }
+  const last = game.bottles[game.bottles.length - 1];
+  if (last) {
+    last.isReservoir = true;
+    last.capacity = 1;
+    last.h = BASE_BH_1ROW * RESERVOIR_HEIGHT_FACTOR;
+  }
+  buildHUD();
+  Audio.addTube();
+  vibrate([15, 30, 15]);
+  for (const b of game.bottles) b.flash = 0.35;
+};
+
+const openSettings = () => {
+  if (game.busy) return;
+  settingsOpen = true;
+  screen = 'settings';
+  confirmOpen = false;
+  langPopupOpen = false;
+};
+
+const buildSettingsPanelLogic = (x, y) => {
+  const panelX = 60, panelY = 300, panelW = W - 120;
+  const cardX = panelX + 24, cardW = panelW - 48;
+  const rowH = 92, rowY0 = panelY + 100;
+  const closeX = panelX + panelW - 40, closeY = panelY + 20;
+
+  if (langPopupOpen) {
+    const dW = 480, dH = 620;
+    const dx = (W - dW) / 2, dy = (H - dH) / 2;
+    const btnW = 400, btnH = 76, gap = 12;
+    const startY = dy + 110;
+    for (let i = 0; i < LANG_ORDER.length; i++) {
+      const by = startY + i * (btnH + gap);
+      const bx = W / 2 - btnW / 2;
+      if (x >= bx && x <= bx + btnW && y >= by && y <= by + btnH) {
+        Save.data.lang = LANG_ORDER[i];
+        LANG = LANG_ORDER[i];
+        Save.save();
+        langPopupOpen = false;
+        Audio.button();
+        vibrate(15);
+        return true;
+      }
+    }
+    if (x < dx || x > dx + dW || y < dy || y > dy + dH) {
+      langPopupOpen = false; Audio.button();
+    }
+    return false;
+  }
+
+  if ((x - closeX) ** 2 + (y - closeY) ** 2 < 40 * 40) {
+    settingsOpen = false; screen = 'game'; Audio.button();
+    return true;
+  }
+  if (confirmOpen) {
+    const dW = 520, dH = 240;
+    const dx = (W - dW) / 2, dy = (H - dH) / 2;
+    const btnW = 160, btnH = 56, gap = 20;
+    const yesX = W / 2 - btnW / 2 - gap / 2 - 8;
+    const noX = W / 2 + btnW / 2 + gap / 2 + 8;
+    const yBtn = dy + dH - 60;
+    if (x >= yesX - btnW / 2 && x <= yesX + btnW / 2 && y >= yBtn - btnH / 2 && y <= yBtn + btnH / 2) {
+      Save.reset(); confirmOpen = false; Audio.button(); vibrate(20);
+      startGame(1); return true;
+    }
+    if (x >= noX - btnW / 2 && x <= noX + btnW / 2 && y >= yBtn - btnH / 2 && y <= yBtn + btnH / 2) {
+      confirmOpen = false; Audio.button(); return true;
+    }
+    return false;
+  }
+
+  const keys = ['sound', 'music', 'vibrate'];
+  for (let i = 0; i < 3; i++) {
+    const ry = rowY0 + i * rowH + rowH / 2;
+    if (y >= ry - rowH / 2 && y <= ry + rowH / 2 && x >= cardX && x <= cardX + cardW) {
+      Save.data[keys[i]] = !Save.data[keys[i]];
+      Save.save();
+      if (keys[i] === 'sound' && Audio.sfxGain) {
+        Audio.sfxGain.gain.value = Save.data.sound ? 1 : 0;
+      }
+      if (keys[i] === 'music') {
+        if (Audio.ambientGain) Audio.ambientGain.gain.value = Save.data.music ? 0.42 : 0;
+        if (Save.data.music) Audio.startAmbient(); else Audio.stopAmbient();
+      }
+      if (keys[i] === 'vibrate') vibrate(20);
+      Audio.button();
+      return true;
+    }
+  }
+  const langRy = rowY0 + 3 * rowH + rowH / 2;
+  if (y >= langRy - rowH / 2 && y <= langRy + rowH / 2 && x >= cardX && x <= cardX + cardW) {
+    langPopupOpen = true; Audio.button(); return true;
+  }
+  const resetY = rowY0 + 4 * rowH + rowH / 2;
+  if (y >= resetY - rowH / 2 && y <= resetY + rowH / 2 && x >= cardX && x <= cardX + cardW) {
+    confirmOpen = true; Audio.button(); return true;
+  }
+  return false;
+};
+
+const showAdModal = (type) => {
+  adType = type;
+  adPending = false;
+  screen = 'ad';
+  modalButtons = [
+    { x: W / 2, y: 770, w: 440, h: 88, label: t('watchAd'), fontSize: 20, primary: true,
+      onClick: () => startAdTimer(type) },
+    { x: W / 2, y: 880, w: 440, h: 76, label: t('cancel'), fontSize: 18,
+      onClick: () => { screen = 'game'; modalButtons = []; adType = null; } }
+  ];
+};
+
+const startAdTimer = (type) => {
+  modalButtons = [];
+  adPending = true;
+  adCountdown = AD_DURATION;
+  adType = type;
+  screen = 'game';
+  if (adTimer) clearInterval(adTimer);
+  adTimer = setInterval(() => {
+    adCountdown--;
+    if (adCountdown <= 0) {
+      clearInterval(adTimer);
+      adTimer = null;
+      adPending = false;
+      if (type === 'undo') {
+        Save.data.undoCount += AD_REWARD;
+      } else if (type === 'reservoir') {
+        Save.data.tubeAddsCount += AD_REWARD;
+      }
+      Save.save();
+      Audio.pickup();
+      vibrate(20);
+      screen = 'game';
+      adType = null;
+      buildHUD();
+    }
+  }, 1000);
+};
+
+const undoMove = () => {
+  if (game.busy || game.pour) return;
+  if (game.history.length === 0) {
+    showToast(t('noActionToUndo'));
+    Audio.toast();
+    vibrate(15);
+    return;
+  }
+  if (Save.data.undoCount <= 0) { showAdModal('undo'); return; }
+  Save.data.undoCount--;
+  Save.save();
+  const h = game.history.pop();
+  game.level.state = h.state.map(a => a.colors.slice());
+  game.level.bottles = h.state.length;
+  clearBottles();
+  game.selected = null;
+  layoutBottles(game.level);
+  for (let i = 0; i < game.bottles.length; i++) {
+    if (h.state[i] && h.state[i].isReservoir) {
+      game.bottles[i].isReservoir = true;
+      game.bottles[i].capacity = 1;
+      game.bottles[i].h = BASE_BH_1ROW * RESERVOIR_HEIGHT_FACTOR;
+    }
+  }
+  SplashPool.reset();
+  RipplePool.reset();
+  Audio.undo();
+  vibrate(10);
+  buildHUD();
+};
+
+const canPour = (src, dst) => {
+  if (!src || !dst) return 0;
+  if (src === dst) return 0;
+  if (isBottleComplete(src)) return 0;
+  if (!src.colors.length) return 0;
+  if (dst.colors.length >= dst.capacity) return 0;
+  const top = src.colors[src.colors.length - 1];
+  let cnt = 0;
+  for (let i = src.colors.length - 1; i >= 0 && src.colors[i] === top; i--) cnt++;
+  return Math.min(cnt, dst.capacity - dst.colors.length);
+};
+
+const onBottleTap = (b) => {
+  if (game.busy || game.finished) return;
+  if (settingsOpen || adPending || screen === 'victory' || screen === 'ad') return;
+  if (b.glowT > 0.1) return;
+  b.touchWobble = 0.5;
+
+  if (isBottleComplete(b) && game.selected !== b) {
+    Audio.invalid(); vibrate(20); b.shake = 0.3; return;
+  }
+
+  if (!game.selected) {
+    if (!b.colors.length) { Audio.invalid(); vibrate(30); b.shake = 0.3; return; }
+    game.selected = b; b.selected = true; Audio.pickup(); vibrate(12); return;
+  }
+  if (game.selected === b) {
+    b.selected = false; game.selected = null; Audio.putDown(); return;
+  }
+
+  const count = canPour(game.selected, b);
+  if (count <= 0) {
+    Audio.invalid(); vibrate(30); b.shake = 0.3;
+    const prev = game.selected;
+    prev.selected = false; game.selected = null;
+    if (b.colors.length > 0 && !isBottleComplete(b)) {
+      game.selected = b; b.selected = true; Audio.pickup();
+    }
+    return;
+  }
+
+  game.history.push({
+    type: 'pour',
+    state: game.bottles.map(x => ({ colors: x.colors.slice(), isReservoir: x.isReservoir }))
+  });
+  if (game.history.length > 200) game.history.shift();
+
+  const src = game.selected;
+  game.selected = null;
+  src.selected = false;
+  beginPour(src, b, count);
+};
+
+const beginPour = (src, dst, count) => {
+  const dir = dst.baseX >= src.baseX ? 1 : -1;
+  const angle = POUR_ANGLE * dir;
+  const lx = dir * src.w / 2, ly = -src.h + 4;
+  const cosA = Math.cos(angle), sinA = Math.sin(angle);
+  const rotOffX = lx * cosA - ly * sinA;
+  const rotOffY = lx * sinA + ly * cosA;
+  const dstMouthX = dst.baseX;
+  const dstMouthY = dst.baseY - dst.h;
+  const srcMouthTargetX = dstMouthX + dir * 6;
+  const srcMouthTargetY = dstMouthY - 40;
+  const finalX = srcMouthTargetX - rotOffX;
+  const finalY = srcMouthTargetY - rotOffY;
+  const tPour = T_POUR_BASE + count * T_POUR_PER;
+  game.pour = {
+    src, dst, count,
+    color: src.colors[src.colors.length - 1],
+    phase: 'anticipate', t: 0,
+    startX: src.baseX, startY: src.baseY,
+    finalX, finalY, finalRot: angle,
+    baseX: src.baseX, baseY: src.baseY,
+    dir, streamPhase: 0, dropTimer: 0, splashDone: false,
+    liftHeight: 65, tPour
+  };
+  game.busy = true;
+  buildHUD();
+  vibrate(8);
+};
+
+const getStreamEnd = (p) => {
+  const dst = p.dst;
+  const layerH = dst.h / dst.capacity;
+  const grow = (dst.pourIn && p.count) ? dst.pourIn.progress * p.count : 0;
+  const topY = dst.baseY - (dst.colors.length + grow) * layerH;
+  return { x: dst.baseX, y: topY + 3 };
+};
+
+const updatePour = (dt) => {
+  const p = game.pour;
+  if (!p) return;
+  p.t += dt;
+  if (p.phase === 'anticipate') {
+    const u = clamp(p.t / T_ANTICIPATE, 0, 1);
+    p.src.y = p.startY + Math.sin(u * Math.PI) * 8;
+    if (u >= 1) { p.phase = 'arc'; p.t = 0; }
+  } else if (p.phase === 'arc') {
+    const u = clamp(p.t / T_ARC, 0, 1);
+    const e = easeInOutCubic(u);
+    p.src.x = lerp(p.startX, p.finalX, e);
+    p.src.y = lerp(p.startY, p.finalY, e) - Math.sin(u * Math.PI) * (p.liftHeight || 28);
+    p.src.rot = clamp((u - 0.2) / 0.8, 0, 1) * p.finalRot;
+    if (u >= 1) {
+      p.phase = 'pour';
+      p.t = 0;
+      p.src.pourOut = { color: p.color, count: p.count, progress: 0 };
+      p.dst.pourIn = { color: p.color, count: p.count, progress: 0 };
+    }
+  } else if (p.phase === 'pour') {
+    const u = clamp(p.t / p.tPour, 0, 1);
+    p.streamPhase = u;
+    p.src.pourOut.progress = u;
+    p.dst.pourIn.progress = u;
+    const cosA = Math.cos(p.src.rot), sinA = Math.sin(p.src.rot);
+    const lx = p.dir * p.src.w / 2, ly = -p.src.h + 4;
+    p.streamTopX = p.src.x + (lx * cosA - ly * sinA);
+    p.streamTopY = p.src.y + (lx * sinA + ly * cosA);
+    const end = getStreamEnd(p);
+    p.streamBotX = end.x;
+    p.streamBotY = end.y;
+    p.dropTimer -= dt;
+    if (p.dropTimer <= 0) {
+      p.dropTimer = 0.06 + Math.random() * 0.04;
+      const tt = 0.5 + Math.random() * 0.5;
+      const bx = lerp(p.streamTopX, p.streamBotX, tt);
+      const by = lerp(p.streamTopY, p.streamBotY, tt);
+      SplashPool.spawn(bx, by, (Math.random() - 0.5) * 160, -60 - Math.random() * 100, 1.4 + Math.random() * 1.6, p.color);
+    }
+    if (u >= 0.15 && !p.splashDone) {
+      p.splashDone = true;
+      RipplePool.spawn(p.streamBotX, p.streamBotY, p.color);
+    }
+    if (u >= 1) {
+      for (let i = 0; i < p.count; i++) p.dst.colors.push(p.src.colors.pop());
+      p.src.pourOut = null;
+      p.dst.pourIn = null;
+      p.dst.smoothLevel = 1;
+      p.phase = 'return';
+      p.t = 0;
+    }
+  } else if (p.phase === 'return') {
+    const u = clamp(p.t / T_RETURN, 0, 1);
+    const e = easeOutCubic(u);
+    p.src.x = lerp(p.finalX, p.baseX, e);
+    p.src.y = lerp(p.finalY, p.baseY, e);
+    p.src.rot = p.finalRot * (1 - e) + Math.sin(u * Math.PI * 4) * 0.05 * (1 - u);
+    if (u >= 1) {
+      p.src.x = p.baseX;
+      p.src.y = p.baseY;
+      p.src.rot = 0;
+      game.pour = null;
+      afterPour();
+    }
+  }
+};
+
+const drawPourStream = (p) => {
+  if (p.phase !== 'pour') return;
+  const u = p.streamPhase;
+  let fade;
+  if (u < 0.10) fade = u / 0.10;
+  else if (u > 0.90) fade = (1 - u) / 0.10;
+  else fade = 1;
+  fade = clamp(fade, 0, 1);
+  const sx = p.streamTopX, sy = p.streamTopY;
+  const ex = p.streamBotX, ey = p.streamBotY;
+  const fallDist = ey - sy;
+  if (fallDist < 8) return;
+  const wTop = 4.2;
+  const wBot = Math.min(7.5, wTop * (1 + fallDist / 700));
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.globalAlpha = fade * 0.30;
+  ctx.strokeStyle = COLORS[p.color];
+  ctx.lineWidth = wBot * 1.55;
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.globalAlpha = fade * 0.98;
+  ctx.lineWidth = wTop;
+  ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.globalAlpha = fade * 0.60;
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  ctx.lineWidth = Math.max(1.4, wTop * 0.32);
+  ctx.beginPath();
+  ctx.moveTo(sx - wTop * 0.18, sy);
+  ctx.lineTo(ex - wTop * 0.18, ey);
+  ctx.stroke();
+  ctx.globalAlpha = fade;
+  ctx.fillStyle = COLORS[p.color];
+  ctx.beginPath(); ctx.arc(sx, sy, wTop * 1.35, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+};
+
+const afterPour = () => {
+  game.busy = false;
+  for (const b of game.bottles) {
+    const complete = isBottleComplete(b);
+    if (complete && !b.wasComplete) {
+      b.flash = 1;
+      b.wasComplete = true;
+      b.glowT = GLOW_DURATION;
+      Audio.complete();
+    } else if (!complete) b.wasComplete = false;
+  }
+  buildHUD();
+  if (checkWin()) onWin();
+};
+
+const checkWin = () => {
+  let anyNonEmpty = false;
+  for (const b of game.bottles) {
+    if (b.isReservoir) {
+      if (b.colors.length > 0) return false;
+      continue;
+    }
+    if (b.colors.length > 0) anyNonEmpty = true;
+    if (!b.colors.length) continue;
+    if (b.colors.length !== b.capacity) return false;
+    for (let k = 1; k < b.colors.length; k++) {
+      if (b.colors[k] !== b.colors[0]) return false;
+    }
+  }
+  return anyNonEmpty;
+};
+
+const onWin = () => {
+  game.finished = true;
+  game.busy = false;
+  Save.setLevel(Math.min(game.level.id + 1, TOTAL_LEVELS));
+  Audio.victoryFanfare();
+  vibrate([40, 60, 80, 60, 100]);
+  ConfettiPool.spawnBurst(60);
+  screen = 'victory';
+  victoryT = 0;
+  modalButtons = [
+    {
+      x: W / 2, y: 1080, w: 460, h: 90,
+      label: t('continue'), fontSize: 24, primary: true,
+      onClick: () => {
+        modalButtons = [];
+        startGame(Math.min(game.level.id + 1, TOTAL_LEVELS));
+      }
+    }
+  ];
+};
+
+const getTutorialMessage = () => {
+  const lvl = game.level.id;
+  if (lvl > 3 || game.finished) return null;
+  if (lvl === 1) return game.selected ? t('tuto1d') : t('tuto1s');
+  if (lvl === 2) return game.selected ? t('tuto2d') : t('tuto2s');
+  return game.selected ? t('tuto3d') : t('tuto3s');
+};
+
+const drawHudButton = (b) => {
+  ctx.save();
+  const press = b.pressT || 0;
+  ctx.translate(b.x, b.y);
+  ctx.scale(1 - 0.05 * press, 1 - 0.05 * press);
+  const w = b.w, h = b.h;
+  const halfW = w / 2, halfH = h / 2, r = 20;
+  const isDisabled = b.disabled;
+
+  ctx.save();
+  ctx.globalAlpha = isDisabled ? 0.40 : (0.80 - press * 0.25);
+  ctx.fillStyle = 'rgba(5,10,30,0.85)';
+  roundRect(-halfW + 3, -halfH + 8, w, h, r);
+  ctx.fill();
+  ctx.restore();
+
+  const grad = ctx.createLinearGradient(0, -halfH, 0, halfH);
+  if (isDisabled) {
+    grad.addColorStop(0, UI.btn3dTopOff);
+    grad.addColorStop(1, UI.btn3dBottomOff);
+  } else if (press > 0.3) {
+    grad.addColorStop(0, UI.btn3dDark);
+    grad.addColorStop(1, '#0E1C34');
+  } else {
+    grad.addColorStop(0, UI.btn3dTop);
+    grad.addColorStop(0.4, UI.btn3dMid);
+    grad.addColorStop(1, UI.btn3dBottom);
+  }
+  ctx.fillStyle = grad;
+  roundRect(-halfW, -halfH, w, h, r);
+  ctx.fill();
+
+  ctx.strokeStyle = isDisabled ? 'rgba(20,30,55,0.9)' : 'rgba(15,25,55,0.95)';
+  ctx.lineWidth = 3;
+  roundRect(-halfW, -halfH, w, h, r);
+  ctx.stroke();
+
+  drawIcon(b.icon, 0, press * 2, 40, isDisabled ? 'rgba(200,215,240,0.60)' : '#FFFFFF', 3.0);
+
+  if (b.badge !== undefined) {
+    const count = parseInt(b.badge, 10) || 0;
+    const badgeR = 22;
+    const badgeX = halfW - 4;
+    const badgeY = -halfH + 4;
+
+    let cTop, cMid, cBot, glowCol;
+    if (b.badgeType === 'power') {
+      if (count >= 3)      { cTop = '#B9FF6E'; cMid = '#7CFC00'; cBot = '#2E7D00'; glowCol = '#7CFC00'; }
+      else if (count === 2){ cTop = '#FFE066'; cMid = '#FFC107'; cBot = '#C77800'; glowCol = '#FFC107'; }
+      else if (count === 1){ cTop = '#FFB36B'; cMid = '#FF6D00'; cBot = '#B23A00'; glowCol = '#FF6D00'; }
+      else                 { cTop = '#CFCFCF'; cMid = '#9E9E9E'; cBot = '#424242'; glowCol = '#9E9E9E'; }
+    } else {
+      if (count >= 3)      { cTop = '#7BF7FF'; cMid = '#00E5FF'; cBot = '#00838F'; glowCol = '#00E5FF'; }
+      else if (count === 2){ cTop = '#7BF7FF'; cMid = '#26C6DA'; cBot = '#006064'; glowCol = '#26C6DA'; }
+      else if (count === 1){ cTop = '#FFCB7A'; cMid = '#FFB74D'; cBot = '#BF5700'; glowCol = '#FFB74D'; }
+      else                 { cTop = '#CFCFCF'; cMid = '#9E9E9E'; cBot = '#424242'; glowCol = '#9E9E9E'; }
+    }
+
+    ctx.save();
+    ctx.shadowColor = glowCol;
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = cMid;
+    ctx.beginPath();
+    ctx.arc(badgeX, badgeY, badgeR + 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.beginPath();
+    ctx.arc(badgeX + 1, badgeY + 2, badgeR + 0.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    const bGrad = ctx.createLinearGradient(0, badgeY - badgeR, 0, badgeY + badgeR);
+    bGrad.addColorStop(0, cTop);
+    bGrad.addColorStop(0.5, cMid);
+    bGrad.addColorStop(1, cBot);
+    ctx.fillStyle = bGrad;
+    ctx.beginPath();
+    ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+    ctx.fill();
+
+    const shine = ctx.createRadialGradient(
+      badgeX - badgeR * 0.4, badgeY - badgeR * 0.55, 1,
+      badgeX - badgeR * 0.4, badgeY - badgeR * 0.55, badgeR * 0.6
+    );
+    shine.addColorStop(0, 'rgba(255,255,255,0.50)');
+    shine.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = shine;
+    ctx.beginPath();
+    ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(badgeX, badgeY, badgeR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.font = '900 24px ' + FONT;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillText(b.badge, badgeX + 1, badgeY + 3);
+
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = '#000000';
+    ctx.strokeText(b.badge, badgeX, badgeY + 1);
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(b.badge, badgeX, badgeY + 1);
+  }
+  ctx.restore();
+};
+
+const renderToast = () => {
+  if (toastTimer <= 0) return;
+
+  const t01 = 1 - toastTimer / TOAST_DURATION;
+  let alpha = 1;
+  if (t01 < 0.12) alpha = t01 / 0.12;
+  else if (t01 > 0.82) alpha = (1 - t01) / 0.18;
+  alpha = clamp(alpha, 0, 1);
+
+  const scale = t01 < 0.2 ? 0.85 + (t01 / 0.2) * 0.15 : 1;
+
+  const panelW = 660;
+  const panelH = 180;
+  const panelX = (W - panelW) / 2;
+  const panelY = 400;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  ctx.translate(W / 2, panelY + panelH / 2);
+  ctx.scale(scale, scale);
+  ctx.translate(-W / 2, -(panelY + panelH / 2));
+
+  ctx.save();
+  ctx.globalAlpha *= 0.65;
+  ctx.fillStyle = '#000';
+  roundRect(panelX + 6, panelY + 20, panelW, panelH, 32);
+  ctx.fill();
+  ctx.restore();
+
+  const grad = ctx.createLinearGradient(0, panelY, 0, panelY + panelH);
+  grad.addColorStop(0, 'rgba(48,52,96,0.99)');
+  grad.addColorStop(0.5, 'rgba(28,32,72,0.99)');
+  grad.addColorStop(1, 'rgba(14,16,42,0.99)');
+  ctx.fillStyle = grad;
+  roundRect(panelX, panelY, panelW, panelH, 32);
+  ctx.fill();
+
+  const halo = ctx.createRadialGradient(
+    panelX + panelW / 2, panelY + panelH / 2, 20,
+    panelX + panelW / 2, panelY + panelH / 2, panelW / 2
+  );
+  halo.addColorStop(0, 'rgba(255,213,79,0.20)');
+  halo.addColorStop(1, 'rgba(255,213,79,0)');
+  ctx.fillStyle = halo;
+  roundRect(panelX, panelY, panelW, panelH, 32);
+  ctx.fill();
+
+  const borderGrad = ctx.createLinearGradient(panelX, panelY, panelX + panelW, panelY + panelH);
+  borderGrad.addColorStop(0, '#00E5FF');
+  borderGrad.addColorStop(0.5, '#FFD54F');
+  borderGrad.addColorStop(1, '#00E5FF');
+  ctx.strokeStyle = borderGrad;
+  ctx.lineWidth = 3.5;
+  roundRect(panelX, panelY, panelW, panelH, 32);
+  ctx.stroke();
+
+  const iconY = panelY + 48;
+  ctx.save();
+  ctx.shadowColor = '#FFD54F';
+  ctx.shadowBlur = 22;
+  ctx.beginPath();
+  ctx.arc(W / 2, iconY, 30, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255,213,79,0.15)';
+  ctx.fill();
+  ctx.restore();
+
+  ctx.strokeStyle = '#FFD54F';
+  ctx.lineWidth = 2.8;
+  ctx.beginPath();
+  ctx.arc(W / 2, iconY, 30, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.fillStyle = '#FFD54F';
+  ctx.font = '900 36px ' + FONT;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('!', W / 2, iconY + 3);
+
+  /* Taille de police adaptative pour s'adapter à toutes les langues */
+  const msgY = panelY + 128;
+  const maxTextW = panelW - 60;
+  let fontSize = 30;
+  ctx.font = '900 ' + fontSize + 'px ' + FONT;
+  while (ctx.measureText(toastMessage).width > maxTextW && fontSize > 16) {
+    fontSize -= 2;
+    ctx.font = '900 ' + fontSize + 'px ' + FONT;
+  }
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+
+  ctx.fillStyle = 'rgba(0,0,0,0.65)';
+  ctx.fillText(toastMessage, W / 2 + 2, msgY + 4);
+
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(10,10,25,0.95)';
+  ctx.strokeText(toastMessage, W / 2, msgY);
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillText(toastMessage, W / 2, msgY);
+
+  ctx.restore();
+};
+
+const renderGame = (time) => {
+  drawBackground(time);
+  text(`${t('level')} ${game.level.id}`, W / 2, 68, { size: 42, weight: '800', color: UI.textMain });
+
+  const tuto = getTutorialMessage();
+  if (tuto) {
+    const bubbleY = 285;
+    ctx.font = '700 22px ' + FONT;
+    const tw = Math.max(200, ctx.measureText(tuto).width + 68);
+    const th = 60;
+    const tx = Math.max(30, (W - tw) / 2);
+    drawGlassPanel(tx, bubbleY - th / 2, tw, th, 30, { shadowStrength: 0.6 });
+    ctx.fillStyle = '#FFFFFF';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(tuto, tx + tw / 2, bubbleY + 2);
+  }
+
+  let srcIdx = -1;
+  if (game.pour) srcIdx = game.bottles.indexOf(game.pour.src);
+  for (let i = 0; i < game.bottles.length; i++) {
+    if (i === srcIdx) continue;
+    drawBottle(game.bottles[i], time);
+  }
+  if (srcIdx >= 0) drawBottle(game.bottles[srcIdx], time);
+
+  if (game.pour) drawPourStream(game.pour);
+  RipplePool.draw();
+  SplashPool.draw();
+  ConfettiPool.draw();
+
+  ctx.fillStyle = '#0A0E1F';
+  ctx.fillRect(0, H - AD_BANNER_HEIGHT, W, AD_BANNER_HEIGHT);
+  ctx.fillStyle = 'rgba(192,202,245,0.25)';
+  ctx.font = '500 14px ' + FONT;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(t('ad'), W / 2, H - AD_BANNER_HEIGHT / 2);
+
+  if (adPending) {
+    ctx.fillStyle = 'rgba(10,11,18,0.92)';
+    ctx.fillRect(0, 0, W, H);
+
+    const cx = W / 2;
+    const cy = H / 2 - 40;
+    text(t('ad'), cx, cy - 60, { size: 28, weight: '700', color: UI.accent });
+
+    const ringR = 90;
+    const ringW = 12;
+    const prog = 1 - (adCountdown / AD_DURATION);
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,229,255,0.20)';
+    ctx.lineWidth = ringW;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, ringR, -Math.PI / 2, -Math.PI / 2 + prog * Math.PI * 2);
+    ctx.strokeStyle = UI.accent;
+    ctx.lineWidth = ringW;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+
+    text(String(adCountdown), cx, cy + 2, { size: 60, weight: '900', color: '#FFFFFF' });
+    text('s', cx, cy + 45, { size: 18, weight: '600', color: UI.textSub });
+
+    const msgType = adType === 'reservoir' ? 'noMoreReservoir' : 'noMoreUndo';
+    text(t(msgType), cx, cy + 140, { size: 20, weight: '600', color: UI.textMain });
+  }
+
+  renderToast();
+};
+
+const renderVictory = (time) => {
+  ctx.fillStyle = 'rgba(10,11,18,0.88)';
+  ctx.fillRect(0, 0, W, H);
+
+  const panelW = 520;
+  const panelX = (W - panelW) / 2;
+  const panelY = 340;
+  const panelH = 600;
+  const appear = clamp(victoryT / 0.35, 0, 1);
+  const ease = easeOutCubic(appear);
+
+  ctx.save();
+  ctx.globalAlpha = ease;
+
+  ctx.save();
+  ctx.globalAlpha = 0.5 * ease;
+  ctx.fillStyle = '#000';
+  roundRect(panelX + 3, panelY + 18, panelW, panelH, 40);
+  ctx.fill();
+  ctx.restore();
+
+  const grad = ctx.createLinearGradient(0, panelY, 0, panelY + panelH);
+  grad.addColorStop(0, 'rgba(40,44,84,0.99)');
+  grad.addColorStop(0.5, 'rgba(24,28,60,0.99)');
+  grad.addColorStop(1, 'rgba(14,15,38,0.99)');
+  ctx.fillStyle = grad;
+  roundRect(panelX, panelY, panelW, panelH, 40);
+  ctx.fill();
+
+  const borderGrad = ctx.createLinearGradient(panelX, panelY, panelX + panelW, panelY + panelH);
+  borderGrad.addColorStop(0, 'rgba(0,229,255,0.80)');
+  borderGrad.addColorStop(0.5, 'rgba(0,229,255,1.0)');
+  borderGrad.addColorStop(1, 'rgba(0,229,255,0.80)');
+  ctx.strokeStyle = borderGrad;
+  ctx.lineWidth = 2.5;
+  roundRect(panelX, panelY, panelW, panelH, 40);
+  ctx.stroke();
+
+  const cx = W / 2;
+  let cy = panelY + 140;
+
+  text(t('congrats'), cx, cy, { size: 60, weight: '900', color: '#FFFFFF' });
+  cy += 82;
+  text(t('congrats2'), cx, cy, { size: 32, weight: '700', color: UI.accent });
+  cy += 90;
+
+  ctx.strokeStyle = 'rgba(0,229,255,0.35)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - 120, cy);
+  ctx.lineTo(cx + 120, cy);
+  ctx.stroke();
+  cy += 60;
+
+  text(`${t('levelDonePre')} ${game.level.id}`, cx, cy, { size: 22, weight: '600', color: UI.textMain });
+  cy += 40;
+  text(t('levelDone'), cx, cy, { size: 18, weight: '500', color: UI.textSub });
+
+  ctx.restore();
+};
+
+const renderSettingsPanel = () => {
+  ctx.fillStyle = 'rgba(10,11,18,0.78)';
+  ctx.fillRect(0, 0, W, H);
+
+  const panelX = 60, panelY = 300;
+  const panelW = W - 120, panelH = 660;
+  drawGlassPanel(panelX, panelY, panelW, panelH, 28);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '700 28px ' + FONT;
+  ctx.fillStyle = UI.textMain;
+  ctx.fillText(t('settings'), W / 2, panelY + 50);
+
+  const closeX = panelX + panelW - 38;
+  const closeY = panelY + 34;
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.beginPath(); ctx.arc(closeX, closeY, 22, 0, Math.PI * 2); ctx.fill();
+  drawIcon('close', closeX, closeY, 20, UI.textMain, 2.2);
+
+  const cardX = panelX + 24, cardW = panelW - 48;
+  const rowH = 92, rowY0 = panelY + 100;
+  const rows = [
+    { icon: 'speaker', label: t('soundFx'), key: 'sound' },
+    { icon: 'note', label: t('ambience'), key: 'music' },
+    { icon: 'wave', label: t('vibration'), key: 'vibrate' }
+  ];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const ry = rowY0 + i * rowH + rowH / 2;
+    ctx.fillStyle = UI.accentDim;
+    ctx.beginPath(); ctx.arc(cardX + 34, ry, 22, 0, Math.PI * 2); ctx.fill();
+    drawIcon(r.icon, cardX + 34, ry, 22, UI.accent, 2.2);
+    ctx.textAlign = 'left';
+    ctx.font = '500 18px ' + FONT;
+    ctx.fillStyle = UI.textMain;
+    ctx.fillText(r.label, cardX + 74, ry + 1);
+    const tw = 76, th = 38;
+    const tx = cardX + cardW - tw, ty = ry - th / 2;
+    const on = Save.data[r.key];
+    ctx.fillStyle = on ? UI.toggleOn : UI.toggleOff;
+    roundRect(tx, ty, tw, th, th / 2);
+    ctx.fill();
+    const cr = th / 2 - 4;
+    const cx = on ? tx + tw - cr - 4 : tx + cr + 4;
+    ctx.fillStyle = '#0A0A15';
+    ctx.beginPath(); ctx.arc(cx, ry, cr, 0, Math.PI * 2); ctx.fill();
+  }
+
+  const langRy = rowY0 + 3 * rowH + rowH / 2;
+  ctx.fillStyle = UI.accentDim;
+  ctx.beginPath(); ctx.arc(cardX + 34, langRy, 22, 0, Math.PI * 2); ctx.fill();
+  drawIcon('globe', cardX + 34, langRy, 22, UI.accent, 2.2);
+  ctx.textAlign = 'left';
+  ctx.font = '500 18px ' + FONT;
+  ctx.fillStyle = UI.textMain;
+  ctx.fillText(t('language'), cardX + 74, langRy + 1);
+  const ltw = 92, lth = 38;
+  const ltx = cardX + cardW - ltw;
+  ctx.fillStyle = UI.accentDim;
+  roundRect(ltx, langRy - lth / 2, ltw, lth, lth / 2);
+  ctx.fill();
+  ctx.fillStyle = UI.accent;
+  ctx.font = '700 16px ' + FONT;
+  ctx.textAlign = 'center';
+  const curCode = (LANG_LABELS[LANG] && LANG_LABELS[LANG].code) || 'EN';
+  ctx.fillText(curCode, ltx + ltw / 2, langRy + 1);
+
+  const resetRy = rowY0 + 4 * rowH + rowH / 2;
+  roundRect(cardX + 20, resetRy - 28, cardW - 40, 56, 14);
+  ctx.strokeStyle = UI.danger;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  drawIcon('trash', cardX + 46, resetRy, 20, UI.danger, 2.0);
+  ctx.textAlign = 'left';
+  ctx.font = '600 16px ' + FONT;
+  ctx.fillStyle = UI.danger;
+  ctx.fillText(t('resetProgress'), cardX + 76, resetRy + 1);
+
+  if (confirmOpen) {
+    ctx.fillStyle = 'rgba(10,11,18,0.85)';
+    ctx.fillRect(0, 0, W, H);
+    const dW = 520, dH = 240;
+    const dx = (W - dW) / 2, dy = (H - dH) / 2;
+    drawGlassPanel(dx, dy, dW, dH, 24);
+    text(t('resetConfirm'), W / 2, dy + 76, { size: 18, weight: '500', color: UI.textMain });
+    const btnW = 160, btnH = 56, gap = 20;
+    const yesX = W / 2 - btnW / 2 - gap / 2 - 8;
+    const noX = W / 2 + btnW / 2 + gap / 2 + 8;
+    const by = dy + dH - 60;
+    ctx.fillStyle = UI.accent;
+    roundRect(yesX - btnW / 2, by - btnH / 2, btnW, btnH, 14);
+    ctx.fill();
+    text(t('yes'), yesX, by + 1, { size: 18, weight: '700', color: '#0A0A15' });
+    roundRect(noX - btnW / 2, by - btnH / 2, btnW, btnH, 14);
+    ctx.strokeStyle = UI.glassBorderStrong;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    text(t('no'), noX, by + 1, { size: 18, weight: '700', color: UI.textMain });
+  }
+
+  /* ═══ Popup de sélection de langue (5 langues) ═══ */
+  if (langPopupOpen) {
+    ctx.fillStyle = 'rgba(10,11,18,0.90)';
+    ctx.fillRect(0, 0, W, H);
+
+    const dW = 480, dH = 620;
+    const dx = (W - dW) / 2, dy = (H - dH) / 2;
+    drawGlassPanel(dx, dy, dW, dH, 28);
+
+    text(t('chooseLang'), W / 2, dy + 55, { size: 24, weight: '800', color: UI.textMain });
+
+    const btnW = 400, btnH = 76, gap = 12;
+    const startY = dy + 110;
+    for (let i = 0; i < LANG_ORDER.length; i++) {
+      const code = LANG_ORDER[i];
+      const item = LANG_LABELS[code];
+      const by = startY + i * (btnH + gap);
+      const bx = W / 2 - btnW / 2;
+      const selected = LANG === code;
+
+      /* Fond */
+      if (selected) {
+        const grad = ctx.createLinearGradient(bx, by, bx + btnW, by + btnH);
+        grad.addColorStop(0, '#00E5FF');
+        grad.addColorStop(1, '#00B8D4');
+        ctx.fillStyle = grad;
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.07)';
+      }
+      roundRect(bx, by, btnW, btnH, 18);
+      ctx.fill();
+
+      /* Bordure */
+      ctx.strokeStyle = selected ? '#FFFFFF' : 'rgba(255,255,255,0.22)';
+      ctx.lineWidth = selected ? 2.5 : 1.2;
+      roundRect(bx, by, btnW, btnH, 18);
+      ctx.stroke();
+
+      /* Halo cyan sur sélection */
+      if (selected) {
+        ctx.save();
+        ctx.shadowColor = '#00E5FF';
+        ctx.shadowBlur = 18;
+        roundRect(bx, by, btnW, btnH, 18);
+        ctx.strokeStyle = '#00E5FF';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      /* Nom complet à gauche */
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = '800 24px ' + FONT;
+      ctx.fillStyle = selected ? '#0A0A15' : UI.textMain;
+      ctx.fillText(item.label, bx + 32, by + btnH / 2 + 1);
+
+      /* Code à droite */
+      ctx.textAlign = 'right';
+      ctx.font = '900 22px ' + FONT;
+      ctx.fillStyle = selected ? '#0A0A15' : UI.accent;
+      ctx.fillText(item.code, bx + btnW - 32, by + btnH / 2 + 1);
+    }
+  }
+};
+
+const renderAdPopup = () => {
+  ctx.fillStyle = 'rgba(10,11,18,0.88)';
+  ctx.fillRect(0, 0, W, H);
+  const panelX = 60, panelY = 420;
+  const panelW = W - 120, panelH = 500;
+  drawGlassPanel(panelX, panelY, panelW, panelH, 28);
+  ctx.fillStyle = UI.accentDim;
+  ctx.beginPath(); ctx.arc(W / 2, panelY + 90, 44, 0, Math.PI * 2); ctx.fill();
+  const iconName = adType === 'reservoir' ? 'jarPlus' : 'undo';
+  drawIcon(iconName, W / 2, panelY + 90, 44, UI.accent, 2.4);
+  const key = adType === 'reservoir' ? 'noReservoirAvailable' : 'noMoreUndo';
+  text(t(key), W / 2, panelY + 180, { size: 22, weight: '600', color: UI.textMain });
+};
+
+const handleTap = (x, y) => {
+  if (adPending) return;
+
+  if (screen === 'victory') {
+    for (let i = modalButtons.length - 1; i >= 0; i--) {
+      const b = modalButtons[i];
+      if (x >= b.x - b.w / 2 && x <= b.x + b.w / 2 && y >= b.y - b.h / 2 && y <= b.y + b.h / 2) {
+        Audio.button();
+        b.onClick();
+        return;
+      }
+    }
+    return;
+  }
+  if (screen === 'settings') { buildSettingsPanelLogic(x, y); return; }
+  if (screen === 'ad') {
+    for (let i = modalButtons.length - 1; i >= 0; i--) {
+      const b = modalButtons[i];
+      if (x >= b.x - b.w / 2 && x <= b.x + b.w / 2 && y >= b.y - b.h / 2 && y <= b.y + b.h / 2) {
+        Audio.button();
+        b.onClick();
+        return;
+      }
+    }
+    return;
+  }
+
+  for (let i = hudButtons.length - 1; i >= 0; i--) {
+    const b = hudButtons[i];
+    if (x >= b.x - b.w / 2 && x <= b.x + b.w / 2 && y >= b.y - b.h / 2 && y <= b.y + b.h / 2) {
+      b.pressT = 1;
+
+      if (b.icon === 'undo') {
+        if (game.busy || game.pour) return;
+        if (game.history.length === 0) {
+          showToast(t('noActionToUndo'));
+          Audio.toast();
+          vibrate(15);
+          return;
+        }
+        if (Save.data.undoCount <= 0) {
+          showAdModal('undo');
+          return;
+        }
+        Audio.button();
+        undoMove();
+        return;
+      }
+
+      if (b.icon === 'jarPlus') {
+        if (game.busy || game.finished || game.pour) return;
+        if (Save.data.tubeAddsCount <= 0) {
+          showToast(t('noReservoirAvailable'));
+          Audio.toast();
+          vibrate(15);
+          setTimeout(() => {
+            if (screen === 'game') showAdModal('reservoir');
+          }, 900);
+          return;
+        }
+        Audio.button();
+        addReservoir();
+        return;
+      }
+
+      if (b.disabled) return;
+      Audio.button();
+      b.onClick();
+      return;
+    }
+  }
+
+  if (!game.busy && !game.finished && !game.pour) {
+    for (const bo of game.bottles) {
+      if (x >= bo.baseX - bo.w / 2 - 8 && x <= bo.baseX + bo.w / 2 + 8 &&
+          y >= bo.baseY - bo.h - 8 && y <= bo.baseY + 8) {
+        onBottleTap(bo);
+        return;
+      }
+    }
+  }
+};
+
+canvas.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  Audio.init();
+  Audio.resume();
+  const p = toLogical(e);
+  handleTap(p.x, p.y);
+}, { passive: false });
+
+const update = (dt, time) => {
+  if (screen === 'victory') victoryT += dt;
+  if (toastTimer > 0) toastTimer = Math.max(0, toastTimer - dt);
+  for (const b of hudButtons) {
+    if (b.pressT > 0) b.pressT = Math.max(0, b.pressT - dt * 4);
+  }
+  for (const b of game.bottles) {
+    if (b.glowT > 0) b.glowT = Math.max(0, b.glowT - dt);
+    const target = b.selected ? -22 : 0;
+    b.selectOffset += (target - b.selectOffset) * Math.min(1, dt * 15);
+    if (b.shake > 0) {
+      b.shake -= dt;
+      b.shakeOffset = Math.sin((0.3 - b.shake) * 60) * 8 * (b.shake / 0.3);
+    } else b.shakeOffset = 0;
+    if (b.smoothLevel > 0) b.smoothLevel = Math.max(0, b.smoothLevel - dt * 2.5);
+    if (b.touchWobble > 0) b.touchWobble = Math.max(0, b.touchWobble - dt * 1.8);
+    if (b.flash > 0) b.flash = Math.max(0, b.flash - dt * 2.2);
+  }
+  if (game.pour) updatePour(dt);
+  SplashPool.update(dt);
+  RipplePool.update(dt);
+  ConfettiPool.update(dt);
+};
+
+const render = (time) => {
+  ctx.clearRect(0, 0, W, H);
+  renderGame(time);
+  if (screen === 'settings') renderSettingsPanel();
+  else if (screen === 'ad') renderAdPopup();
+  else if (screen === 'victory') renderVictory(time);
+
+  if (screen === 'game') {
+    for (const b of hudButtons) drawHudButton(b);
+  }
+  if (screen === 'victory' || screen === 'ad') {
+    for (const b of modalButtons) {
+      const r = b.h / 2;
+      if (b.primary) {
+        ctx.fillStyle = UI.accent;
+        roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, r);
+        ctx.fill();
+        if (b.label) text(b.label, b.x, b.y, { size: b.fontSize || 20, weight: '700', color: '#0A0A15' });
+      } else {
+        roundRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, r);
+        ctx.strokeStyle = UI.glassBorderStrong;
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+        if (b.label) text(b.label, b.x, b.y, { size: b.fontSize || 18, weight: '600', color: UI.textMain });
+      }
+    }
+  }
+};
+
+let lastT = 0;
+const loop = (now) => {
+  const dt = Math.min((now - lastT) / 1000, 0.05);
+  lastT = now;
+  update(dt, now);
+  render(now);
+  requestAnimationFrame(loop);
+};
+
+try {
+  layout();
+  startGame(clamp(Save.data.currentLevel || 1, 1, TOTAL_LEVELS));
+  requestAnimationFrame((tt) => { lastT = tt; loop(tt); });
+} catch (err) {
+  console.error('Boot error:', err);
+}
+
+})();
+</script>
+</body>
+</html>
